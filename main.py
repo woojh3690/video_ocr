@@ -1,40 +1,83 @@
-import pandas as pd
+import cv2
 import numpy as np
+import pandas as pd
 from thefuzz import fuzz
+from PIL import Image
 
-# 예시 OCR 결과 데이터 생성
-# 실제로는 OCR 모델을 통해 얻은 결과를 사용해야 합니다.
-# 이 예시에서는 데이터 프레임으로 시뮬레이션합니다.
+from transformers import AutoModel, AutoTokenizer
 
-# 샘플 데이터: 프레임 번호, 추출된 텍스트, 텍스트의 위치 정보(x, y 좌표)
-ocr_results = [
-    {'frame': 1, 'text': '안녕하세요'},
-    {'frame': 2, 'text': '안녕하세요'},
-    {'frame': 3, 'text': '안녕하세'},  # OCR 오류
-    {'frame': 10, 'text': '저는 AI입니다'},
-    {'frame': 11, 'text': '저는 AI입니다'},
-    {'frame': 20, 'text': '만나서'},
-    {'frame': 21, 'text': '만나서 반갑습니다.'},
-    {'frame': 22, 'text': '만나서 반갑습니c.'},  # OCR 오류
-    {'frame': 23, 'text': '만나서 반갑습니다. 저는'},
-    {'frame': 24, 'text': '만나서 반갑습니다. 저는 우준혁'},
-    {'frame': 25, 'text': '만나서 반갑습니다. 저는 우준혁 이라고'},
-    {'frame': 26, 'text': '만나서 반갑습니다. 저는 우준혁 이라고 합니다.'},
-    {'frame': 29, 'text': '아 그러니?'},
-]
+tokenizer = AutoTokenizer.from_pretrained('ucaslcl/GOT-OCR2_0', trust_remote_code=True)
+model = AutoModel.from_pretrained('ucaslcl/GOT-OCR2_0', trust_remote_code=True, low_cpu_mem_usage=True, device_map='cuda', use_safetensors=True, pad_token_id=tokenizer.eos_token_id)
+model = model.eval().cuda()
 
+# 비디오 파일 열기
+video_path = 'test.mp4'  # 여기에 비디오 파일 경로를 입력하세요
+cap = cv2.VideoCapture(video_path)
+
+# 비디오 열기에 실패한 경우 처리
+if not cap.isOpened():
+    print("비디오 파일을 열 수 없습니다.")
+    exit()
+
+# 영상 메타 데이터
+frame_rate = cap.get(cv2.CAP_PROP_FPS)
+total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+
+# 처리할 구간 설정 (초 단위)
+start_time = 10.0  # 시작 시간 (초)
+end_time = 20.0    # 종료 시간 (초)
+
+# 시작 프레임과 종료 프레임 계산
+start_frame = int(start_time * frame_rate)
+end_frame = int(end_time * frame_rate)
+
+# 시작 프레임이 총 프레임 수보다 큰 경우 처리
+if start_frame >= total_frames:
+    print("시작 시간이 비디오의 길이를 초과합니다.")
+    cap.release()
+    exit()
+
+# 종료 프레임이 총 프레임 수보다 큰 경우 총 프레임 수로 설정
+if end_frame > total_frames:
+    end_frame = total_frames - 1
+
+# 비디오 캡처를 시작 프레임으로 설정
+cap.set(cv2.CAP_PROP_POS_FRAMES, start_frame)
+
+# OCR 결과를 저장할 리스트 초기화
+ocr_results = []
+
+# 프레임 번호를 시작 프레임으로 설정
+frame_number = start_frame
+
+# 비디오의 끝까지 프레임을 읽음
+while cap.isOpened():
+    ret, frame = cap.read()
+    if ret:
+        if frame_number > end_frame:
+            break
+
+        # OpenCV의 BGR 이미지를 RGB로 변환
+        frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+        # NumPy 배열을 PIL 이미지로 변환
+        image = Image.fromarray(frame_rgb)
+        # 여기서 OCR을 수행하세요
+        ocr_text = model.chat(tokenizer, image, ocr_type='ocr', gradio_input=True)
+        
+        # OCR 결과를 리스트에 추가
+        ocr_results.append({'frame_number': frame_number, 'text': ocr_text}) 
+        frame_number += 1
+    else:
+        break
+
+# 비디오 캡처 객체 해제
+cap.release()
+
+# OCR 결과를 판다스 데이터프레임으로 변환
 df = pd.DataFrame(ocr_results)
 
-# 프레임 레이트 (예: 30fps)
-frame_rate = 24.0
-
-# 1. 텍스트 정규화
-def normalize_text(text):
-    text = text.strip()
-    # 필요한 경우 추가 정규화 수행
-    return text
-
-df['norm_text'] = df['text'].apply(normalize_text)
+# 인덱스를 프레임 번호로 설정
+df.set_index('frame_number', inplace=True)
 
 # 2. 유사한 텍스트 그룹화
 # 자막 그룹 ID를 저장할 열 생성
@@ -50,13 +93,12 @@ for idx, row in df.iterrows():
     if idx in grouped_indices:
         continue  # 이미 그룹화된 경우
 
-    current_text = row['norm_text']
-    current_frame = row['frame']
+    current_text = row['text']
     similar_indices = []
 
     # 현재 프레임 이후의 데이터와 비교
     for idx2, row2 in df.loc[idx+1:].iterrows():
-        current_text2 = row2['norm_text']
+        current_text2 = row2['text']
 
         if idx2 in grouped_indices:
             continue
@@ -89,20 +131,20 @@ df['group_id'] = df['group_id'].astype(int)
 subtitles = []
 
 for gid, group in df.groupby('group_id'):
-    start_frame = group['frame'].min()
-    end_frame = group['frame'].max()
-    start_time = start_frame / frame_rate
-    end_time = (end_frame + 1) / frame_rate  # 프레임이 0부터 시작한다고 가정
+    start_frame_group = group.index.min()
+    end_frame_group = group.index.max()
+    start_time_sub = start_frame_group / frame_rate
+    end_time_sub = (end_frame_group + 1) / frame_rate  # 프레임이 0부터 시작한다고 가정
 
-    # 최종 자막 텍스트 결정 (가장 빈도수가 높은 텍스트 선택)
-    final_text = max(group['norm_text'], key=len)
+    # 최종 자막 텍스트 결정 (가장 긴 텍스트 선택)
+    final_text = max(group['text'], key=len)
     if final_text == "":
         continue
 
     subtitles.append({
         'index': gid + 1,
-        'start_time': start_time,
-        'end_time': end_time,
+        'start_time': start_time_sub,
+        'end_time': end_time_sub,
         'text': final_text
     })
 

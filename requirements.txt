@@ -1,3 +1,11 @@
+--extra-index-url https://download.pytorch.org/whl/cu118
+torch==2.0.1
+torchvision==0.15.2
+transformers==4.37.2
+tiktoken==0.6.0
+verovio==4.3.1
+accelerate==0.28.0
+numpy==1.26.4
 thefuzz
 pandas
-numpy
+opencv-python
