@@ -24,8 +24,8 @@ frame_rate = cap.get(cv2.CAP_PROP_FPS)
 total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
 
 # 처리할 구간 설정 (초 단위)
-start_time = 10.0  # 시작 시간 (초)
-end_time = 20.0    # 종료 시간 (초)
+start_time = 60.0 * 2 + 12.0    # 시작 시간 (초)
+end_time = 60.0 * 2 + 19.0      # 종료 시간 (초)
 
 # 시작 프레임과 종료 프레임 계산
 start_frame = int(start_time * frame_rate)
