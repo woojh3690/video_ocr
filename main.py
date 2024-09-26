@@ -8,36 +8,40 @@ import torch
 
 from transformers import AutoModel, AutoTokenizer
 
-# CUDA 디바이스가 있는지 확인
-device = 'cuda' if torch.cuda.is_available() else 'cpu'
-
-# 모델과 토크나이저 로드
-tokenizer = AutoTokenizer.from_pretrained('ucaslcl/GOT-OCR2_0', trust_remote_code=True)
-
-# 모델 로드
-model = AutoModel.from_pretrained(
-    'ucaslcl/GOT-OCR2_0',
-    trust_remote_code=True,
-    low_cpu_mem_usage=True,
-    device_map=device,
-    use_safetensors=True,
-    pad_token_id=tokenizer.eos_token_id
-)
-
-# 모델 평가 모드 및 디바이스로 이동
-if device == 'cuda':
-    model = model.eval().cuda()
-else:
-    model = model.eval().to(device)
-
 # OCR 결과를 저장할 파일 경로
 ocr_results_file = 'ocr_results.pkl'  # 또는 'ocr_results.csv'
 
 # OCR 결과 파일이 존재하면 로드하고 OCR 단계를 건너뜁니다.
 if os.path.exists(ocr_results_file):
     print("OCR 결과 파일이 존재합니다. OCR 단계를 건너뜁니다.")
-    df = pd.read_pickle(ocr_results_file)  # 또는 pd.read_csv(ocr_results_file)
+    with open(ocr_results_file, 'rb') as f:
+        data = pd.read_pickle(f)
+        df = data['ocr_results']
+        frame_rate = data['frame_rate']
+        total_frames = data['total_frames']
 else:
+    # CUDA 디바이스가 있는지 확인
+    device = 'cuda' if torch.cuda.is_available() else 'cpu'
+
+    # 모델과 토크나이저 로드
+    tokenizer = AutoTokenizer.from_pretrained('ucaslcl/GOT-OCR2_0', trust_remote_code=True)
+
+    # 모델 로드
+    model = AutoModel.from_pretrained(
+        'ucaslcl/GOT-OCR2_0',
+        trust_remote_code=True,
+        low_cpu_mem_usage=True,
+        device_map=device,
+        use_safetensors=True,
+        pad_token_id=tokenizer.eos_token_id
+    )
+
+    # 모델 평가 모드 및 디바이스로 이동
+    if device == 'cuda':
+        model = model.eval().cuda()
+    else:
+        model = model.eval().to(device)
+
     # 비디오 파일 열기
     video_path = 'test.mp4'  # 여기에 비디오 파일 경로를 입력하세요
     cap = cv2.VideoCapture(video_path)
@@ -107,11 +111,12 @@ else:
     # 인덱스를 프레임 번호로 설정
     df.set_index('frame_number', inplace=True)
 
-    # OCR 결과를 파일로 저장
-    df.to_pickle(ocr_results_file)  # 또는 df.to_csv(ocr_results_file)
+    # OCR 결과와 메타데이터를 함께 저장
+    with open(ocr_results_file, 'wb') as f:
+        pd.to_pickle({'ocr_results': df, 'frame_rate': frame_rate, 'total_frames': total_frames}, f)
 
-# OCR 단계가 끝났으므로 비디오 캡처 객체 해제
-cap.release()
+    # OCR 단계가 끝났으므로 비디오 캡처 객체 해제
+    cap.release()
 
 # 2. 유사한 텍스트 그룹화
 # 자막 그룹 ID를 저장할 열 생성
@@ -148,7 +153,7 @@ for idx, row in df.iterrows():
             if current_text2 == "":
                 break
             distance = fuzz.partial_ratio(current_text, current_text2)
-            if distance > 80:
+            if distance > 50:
                 current_text = current_text2
                 similar_indices.append(idx2)
             else:
