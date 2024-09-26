@@ -4,51 +4,31 @@ import numpy as np
 import pandas as pd
 from thefuzz import fuzz
 from PIL import Image
+import torch
 
 from transformers import AutoModel, AutoTokenizer
 
-# 모델 및 토크나이저 로드
+# CUDA 디바이스가 있는지 확인
+device = 'cuda' if torch.cuda.is_available() else 'cpu'
+
+# 모델과 토크나이저 로드
 tokenizer = AutoTokenizer.from_pretrained('ucaslcl/GOT-OCR2_0', trust_remote_code=True)
+
+# 모델 로드
 model = AutoModel.from_pretrained(
     'ucaslcl/GOT-OCR2_0',
     trust_remote_code=True,
     low_cpu_mem_usage=True,
-    device_map='cuda',
+    device_map=device,
     use_safetensors=True,
     pad_token_id=tokenizer.eos_token_id
 )
-model = model.eval().cuda()
 
-# 비디오 파일 열기
-video_path = 'test.mp4'  # 여기에 비디오 파일 경로를 입력하세요
-cap = cv2.VideoCapture(video_path)
-
-# 비디오 열기에 실패한 경우 처리
-if not cap.isOpened():
-    print("비디오 파일을 열 수 없습니다.")
-    exit()
-
-# 영상 메타 데이터
-frame_rate = cap.get(cv2.CAP_PROP_FPS)
-total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
-
-# 처리할 구간 설정 (초 단위)
-start_time = 60.0 * 2 + 12.0    # 시작 시간 (초)
-end_time = 60.0 * 2 + 19.0      # 종료 시간 (초)
-
-# 시작 프레임과 종료 프레임 계산
-start_frame = int(start_time * frame_rate)
-end_frame = int(end_time * frame_rate)
-
-# 시작 프레임이 총 프레임 수보다 큰 경우 처리
-if start_frame >= total_frames:
-    print("시작 시간이 비디오의 길이를 초과합니다.")
-    cap.release()
-    exit()
-
-# 종료 프레임이 총 프레임 수보다 큰 경우 총 프레임 수로 설정
-if end_frame > total_frames:
-    end_frame = total_frames - 1
+# 모델 평가 모드 및 디바이스로 이동
+if device == 'cuda':
+    model = model.eval().cuda()
+else:
+    model = model.eval().to(device)
 
 # OCR 결과를 저장할 파일 경로
 ocr_results_file = 'ocr_results.pkl'  # 또는 'ocr_results.csv'
@@ -58,6 +38,37 @@ if os.path.exists(ocr_results_file):
     print("OCR 결과 파일이 존재합니다. OCR 단계를 건너뜁니다.")
     df = pd.read_pickle(ocr_results_file)  # 또는 pd.read_csv(ocr_results_file)
 else:
+    # 비디오 파일 열기
+    video_path = 'test.mp4'  # 여기에 비디오 파일 경로를 입력하세요
+    cap = cv2.VideoCapture(video_path)
+
+    # 비디오 열기에 실패한 경우 처리
+    if not cap.isOpened():
+        print("비디오 파일을 열 수 없습니다.")
+        exit()
+
+    # 영상 메타 데이터
+    frame_rate = cap.get(cv2.CAP_PROP_FPS)
+    total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+
+    # 처리할 구간 설정 (초 단위)
+    start_time = 60.0 * 2 + 12.0    # 시작 시간 (초)
+    end_time = 60.0 * 2 + 19.0      # 종료 시간 (초)
+
+    # 시작 프레임과 종료 프레임 계산
+    start_frame = int(start_time * frame_rate)
+    end_frame = int(end_time * frame_rate)
+
+    # 시작 프레임이 총 프레임 수보다 큰 경우 처리
+    if start_frame >= total_frames:
+        print("시작 시간이 비디오의 길이를 초과합니다.")
+        cap.release()
+        exit()
+
+    # 종료 프레임이 총 프레임 수보다 큰 경우 총 프레임 수로 설정
+    if end_frame > total_frames:
+        end_frame = total_frames - 1
+
     # OCR 결과를 저장할 리스트 초기화
     ocr_results = []
     
