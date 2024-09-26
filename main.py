@@ -122,12 +122,10 @@ else:
 # 자막 그룹 ID를 저장할 열 생성
 df['group_id'] = np.nan
 
-group_id = 0
-threshold = 5  # Levenshtein 거리 임계값
-
 # 이미 그룹화된 인덱스를 저장할 집합
 grouped_indices = set()
 
+group_id = 0
 for idx, row in df.iterrows():
     current_text = row['text']
     similar_indices = []
