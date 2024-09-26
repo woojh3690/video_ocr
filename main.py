@@ -1,3 +1,4 @@
+import os
 import cv2
 import numpy as np
 import pandas as pd
@@ -6,8 +7,16 @@ from PIL import Image
 
 from transformers import AutoModel, AutoTokenizer
 
+# 모델 및 토크나이저 로드
 tokenizer = AutoTokenizer.from_pretrained('ucaslcl/GOT-OCR2_0', trust_remote_code=True)
-model = AutoModel.from_pretrained('ucaslcl/GOT-OCR2_0', trust_remote_code=True, low_cpu_mem_usage=True, device_map='cuda', use_safetensors=True, pad_token_id=tokenizer.eos_token_id)
+model = AutoModel.from_pretrained(
+    'ucaslcl/GOT-OCR2_0',
+    trust_remote_code=True,
+    low_cpu_mem_usage=True,
+    device_map='cuda',
+    use_safetensors=True,
+    pad_token_id=tokenizer.eos_token_id
+)
 model = model.eval().cuda()
 
 # 비디오 파일 열기
@@ -41,43 +50,57 @@ if start_frame >= total_frames:
 if end_frame > total_frames:
     end_frame = total_frames - 1
 
-# 비디오 캡처를 시작 프레임으로 설정
-cap.set(cv2.CAP_PROP_POS_FRAMES, start_frame)
+# OCR 결과를 저장할 파일 경로
+ocr_results_file = 'ocr_results.pkl'  # 또는 'ocr_results.csv'
 
-# OCR 결과를 저장할 리스트 초기화
-ocr_results = []
+# OCR 결과 파일이 존재하면 로드하고 OCR 단계를 건너뜁니다.
+if os.path.exists(ocr_results_file):
+    print("OCR 결과 파일이 존재합니다. OCR 단계를 건너뜁니다.")
+    df = pd.read_pickle(ocr_results_file)  # 또는 pd.read_csv(ocr_results_file)
+else:
+    # OCR 결과를 저장할 리스트 초기화
+    ocr_results = []
+    
+    # 비디오 캡처를 시작 프레임으로 설정
+    cap.set(cv2.CAP_PROP_POS_FRAMES, start_frame)
+    
+    # 프레임 번호를 시작 프레임으로 설정
+    frame_number = start_frame
 
-# 프레임 번호를 시작 프레임으로 설정
-frame_number = start_frame
+    # 비디오의 끝까지 프레임을 읽음
+    while cap.isOpened():
+        ret, frame = cap.read()
+        if ret:
+            # 현재 프레임 번호가 종료 프레임을 넘으면 중지
+            if frame_number > end_frame:
+                break
 
-# 비디오의 끝까지 프레임을 읽음
-while cap.isOpened():
-    ret, frame = cap.read()
-    if ret:
-        if frame_number > end_frame:
+            # OpenCV의 BGR 이미지를 RGB로 변환
+            frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+            # NumPy 배열을 PIL 이미지로 변환
+            image = Image.fromarray(frame_rgb)
+            # 여기서 OCR을 수행하세요
+            ocr_text = model.chat(tokenizer, image, ocr_type='ocr', gradio_input=True)
+            # OCR 결과를 리스트에 추가
+            ocr_results.append({'frame_number': frame_number, 'text': ocr_text})
+            frame_number += 1
+        else:
             break
 
-        # OpenCV의 BGR 이미지를 RGB로 변환
-        frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-        # NumPy 배열을 PIL 이미지로 변환
-        image = Image.fromarray(frame_rgb)
-        # 여기서 OCR을 수행하세요
-        ocr_text = model.chat(tokenizer, image, ocr_type='ocr', gradio_input=True)
-        
-        # OCR 결과를 리스트에 추가
-        ocr_results.append({'frame_number': frame_number, 'text': ocr_text}) 
-        frame_number += 1
-    else:
-        break
+    # 비디오 캡처 객체 해제
+    cap.release()
 
-# 비디오 캡처 객체 해제
+    # OCR 결과를 판다스 데이터프레임으로 변환
+    df = pd.DataFrame(ocr_results)
+
+    # 인덱스를 프레임 번호로 설정
+    df.set_index('frame_number', inplace=True)
+
+    # OCR 결과를 파일로 저장
+    df.to_pickle(ocr_results_file)  # 또는 df.to_csv(ocr_results_file)
+
+# OCR 단계가 끝났으므로 비디오 캡처 객체 해제
 cap.release()
-
-# OCR 결과를 판다스 데이터프레임으로 변환
-df = pd.DataFrame(ocr_results)
-
-# 인덱스를 프레임 번호로 설정
-df.set_index('frame_number', inplace=True)
 
 # 2. 유사한 텍스트 그룹화
 # 자막 그룹 ID를 저장할 열 생성
@@ -90,11 +113,13 @@ threshold = 5  # Levenshtein 거리 임계값
 grouped_indices = set()
 
 for idx, row in df.iterrows():
-    if idx in grouped_indices:
-        continue  # 이미 그룹화된 경우
-
     current_text = row['text']
     similar_indices = []
+
+    print(current_text)
+
+    if idx in grouped_indices:
+        continue  # 이미 그룹화된 경우
 
     # 현재 프레임 이후의 데이터와 비교
     for idx2, row2 in df.loc[idx+1:].iterrows():
@@ -136,8 +161,8 @@ for gid, group in df.groupby('group_id'):
     start_time_sub = start_frame_group / frame_rate
     end_time_sub = (end_frame_group + 1) / frame_rate  # 프레임이 0부터 시작한다고 가정
 
-    # 최종 자막 텍스트 결정 (가장 긴 텍스트 선택)
-    final_text = max(group['text'], key=len)
+    # 최종 자막 텍스트 결정 (가장 빈도수가 높은 텍스트 선택)
+    final_text = group['text'].mode()[0]
     if final_text == "":
         continue
 
@@ -156,7 +181,7 @@ def format_time(seconds):
     millis = int((seconds - int(seconds)) * 1000)
     return f"{hours:02}:{minutes:02}:{secs:02},{millis:03}"
 
-with open('output.srt', 'w', encoding='utf-8') as f:
+with open('test.srt', 'w', encoding='utf-8') as f:
     for subtitle in subtitles:
         f.write(f"{subtitle['index']}\n")
         start = format_time(subtitle['start_time'])
@@ -164,4 +189,4 @@ with open('output.srt', 'w', encoding='utf-8') as f:
         f.write(f"{start} --> {end}\n")
         f.write(f"{subtitle['text']}\n\n")
 
-print("SRT 자막 파일이 생성되었습니다: output.srt")
+print("SRT 자막 파일이 생성되었습니다: test.srt")
