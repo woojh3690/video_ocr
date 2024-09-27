@@ -165,6 +165,7 @@ for idx, row in df.iterrows():
 
 # 그룹 ID를 정수형으로 변환
 df['group_id'] = df['group_id'].astype(int)
+df.to_csv("./grouped_subtitles.csv")
 
 # 3. 자막의 시작 시간과 종료 시간 결정
 subtitles = []
