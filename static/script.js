@@ -20,6 +20,8 @@ let videoHeight = 0;
 let startTop = 0;
 let startLeft = 0;
 
+let progressInterval; // 진행 체크를 위한 interval 변수 추가
+
 document.getElementById('video-upload').addEventListener('change', function(e) {
     videoFile = e.target.files[0];
     if (videoFile) {
@@ -31,7 +33,6 @@ document.getElementById('video-upload').addEventListener('change', function(e) {
             body: formData
         }).then(response => response.json())
         .then(data => {
-            // alert 제거
             // 비디오를 서버에서 불러오기
             let url = `/videos/${data.filename}`;
             video.src = url;
@@ -125,6 +126,19 @@ document.addEventListener('mouseup', function(e) {
 });
 
 startOcrBtn.addEventListener('click', function() {
+    // 이전 진행 체크 interval이 있으면 제거
+    if (progressInterval) {
+        clearInterval(progressInterval);
+    }
+
+    // 진행 바 및 예상 완료 시간 초기화
+    progressBar.value = 0;
+    let estimatedCompletion = document.getElementById('estimated-completion');
+    if (estimatedCompletion) {
+        estimatedCompletion.textContent = '';
+    }
+    downloadBtn.style.display = 'none';
+
     // 바운딩 박스의 위치와 크기를 계산
     let videoRect = video.getBoundingClientRect();
     let boxRect = boundingBox.getBoundingClientRect();
@@ -161,17 +175,34 @@ startOcrBtn.addEventListener('click', function() {
 });
 
 function checkProgress() {
-    fetch('/progress/')
-    .then(response => response.json())
-    .then(data => {
-        progressBar.value = data.progress;
-        if (data.progress < 100) {
-            setTimeout(checkProgress, 1000);
-        } else {
-            alert('OCR 완료');
-            downloadBtn.style.display = 'block';
-        }
-    });
+    let startTime = Date.now();
+    progressInterval = setInterval(function() {
+        fetch('/progress/')
+        .then(response => response.json())
+        .then(data => {
+            let currentTime = Date.now();
+            let elapsedTime = (currentTime - startTime) / 1000; // 경과 시간 (초)
+            progressBar.value = data.progress;
+
+            if (data.progress > 0 && data.progress < 100) {
+                let remainingTime = (elapsedTime * (100 - data.progress)) / data.progress;
+
+                // 남은 예상 시간 표시
+                let estimatedCompletion = document.getElementById('estimated-completion');
+                estimatedCompletion.textContent = '남은 예상 시간: 약 ' + formatTime(remainingTime);
+            }
+
+            if (data.progress >= 100) {
+                clearInterval(progressInterval);
+                // 남은 예상 시간 제거
+                let estimatedCompletion = document.getElementById('estimated-completion');
+                if (estimatedCompletion) {
+                    estimatedCompletion.textContent = 'OCR 완료';
+                }
+                downloadBtn.style.display = 'block';
+            }
+        });
+    }, 5000); // 5초마다 진행 상황 체크
 }
 
 downloadBtn.addEventListener('click', function() {
