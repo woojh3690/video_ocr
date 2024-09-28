@@ -19,6 +19,7 @@ from PIL import Image
 import torch
 
 from transformers import AutoModel, AutoTokenizer
+from transformers.models.qwen2.modeling_qwen2 import Qwen2ForCausalLM
 
 app = FastAPI()
 
@@ -37,7 +38,7 @@ progress = {}
 # 모델 및 토크나이저 로드 (서버 시작 시 한 번만 로드)
 device = 'cuda' if torch.cuda.is_available() else 'cpu'
 tokenizer = AutoTokenizer.from_pretrained('ucaslcl/GOT-OCR2_0', trust_remote_code=True)
-model = AutoModel.from_pretrained(
+model: Qwen2ForCausalLM = AutoModel.from_pretrained(
     'ucaslcl/GOT-OCR2_0',
     trust_remote_code=True,
     low_cpu_mem_usage=True,
@@ -45,6 +46,7 @@ model = AutoModel.from_pretrained(
     use_safetensors=True,
     pad_token_id=tokenizer.eos_token_id
 )
+print(type(model))
 model = model.eval().to(device)
 
 class OCRRequest(BaseModel):
@@ -159,15 +161,13 @@ def process_ocr(video_filename, x, y, width, height):
             if frame_number > end_frame:
                 break
 
-            # 선택된 영역으로 프레임을 크롭
-            cropped_frame = frame[y:y+height, x:x+width]
-
             # BGR에서 RGB로 변환
-            frame_rgb = cv2.cvtColor(cropped_frame, cv2.COLOR_BGR2RGB)
+            frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
             image = Image.fromarray(frame_rgb)
 
             # OCR 수행
-            ocr_text = model.chat(tokenizer, image, ocr_type='ocr', gradio_input=True)
+            ocr_box = f'[{x},{y},{x+width},{y+height}]'
+            ocr_text = model.chat(tokenizer, image, ocr_type='ocr', ocr_box=ocr_box, gradio_input=True)
 
             ocr_results.append({'frame_number': frame_number, 'text': ocr_text})
 
