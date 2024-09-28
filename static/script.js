@@ -195,26 +195,29 @@ function checkProgress() {
         fetch('/progress/')
         .then(response => response.json())
         .then(data => {
-            let currentTime = Date.now();
-            let elapsedTime = (currentTime - startTime) / 1000; // 경과 시간 (초)
-            progressBar.value = data.progress;
+            if (progressBar.value != data.progress) {
+                progressBar.value = data.progress;
 
-            if (data.progress > 0 && data.progress < 100) {
-                let remainingTime = (elapsedTime * (100 - data.progress)) / data.progress;
-
-                // 남은 예상 시간 표시
-                let estimatedCompletion = document.getElementById('estimated-completion');
-                estimatedCompletion.textContent = '남은 예상 시간: 약 ' + formatTime(remainingTime);
-            }
-
-            if (data.progress >= 100) {
-                clearInterval(progressInterval);
-                // 남은 예상 시간 제거
-                let estimatedCompletion = document.getElementById('estimated-completion');
-                if (estimatedCompletion) {
-                    estimatedCompletion.textContent = 'OCR 완료';
+                let currentTime = Date.now();
+                let elapsedTime = (currentTime - startTime) / 1000; // 경과 시간 (초)
+    
+                if (data.progress > 0 && data.progress < 100) {
+                    let remainingTime = (elapsedTime * (100 - data.progress)) / data.progress;
+    
+                    // 남은 예상 시간 표시
+                    let estimatedCompletion = document.getElementById('estimated-completion');
+                    estimatedCompletion.textContent = '남은 예상 시간: 약 ' + formatTime(remainingTime);
                 }
-                downloadBtn.style.display = 'block';
+    
+                if (data.progress >= 100) {
+                    clearInterval(progressInterval);
+                    // 남은 예상 시간 제거
+                    let estimatedCompletion = document.getElementById('estimated-completion');
+                    if (estimatedCompletion) {
+                        estimatedCompletion.textContent = 'OCR 완료';
+                    }
+                    downloadBtn.style.display = 'block';
+                }
             }
         });
     }, 5000); // 5초마다 진행 상황 체크
