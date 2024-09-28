@@ -1,0 +1,49 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Video OCR</title>
+    <link rel="stylesheet" href="https://stackpath.bootstrapcdn.com/bootstrap/4.5.0/css/bootstrap.min.css">
+    <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+    <div class="container mt-5">
+        <h1 class="text-center">비디오 OCR</h1>
+        <div class="row mt-4">
+            <div class="col-md-6">
+                <input type="file" id="video-upload" accept="video/*" class="form-control-file">
+            </div>
+        </div>
+        <div class="row mt-4">
+            <div class="col-md-12 position-relative">
+                <div id="video-container" class="position-relative">
+                    <video id="video" controls class="w-100"></video>
+                    <!-- 바운딩 박스 -->
+                    <div id="bounding-box">
+                        <!-- 드래그 핸들 -->
+                        <div class="handle top"></div>
+                        <div class="handle right"></div>
+                        <div class="handle bottom"></div>
+                        <div class="handle left"></div>
+                    </div>
+                </div>
+            </div>
+        </div>
+        <div class="row mt-4">
+            <div class="col-md-6">
+                <button id="start-ocr-btn" class="btn btn-success">OCR 시작</button>
+            </div>
+            <div class="col-md-6" id="progress-container" style="display:none;">
+                <label for="progress">진행 상황:</label>
+                <progress id="progress" value="0" max="100"></progress>
+            </div>
+        </div>
+        <div class="row mt-4">
+            <div class="col-md-12">
+                <button id="download-btn" class="btn btn-info" style="display:none;">SRT 다운로드</button>
+            </div>
+        </div>
+    </div>
+
+    <script src="/static/script.js"></script>
+</body>
+</html>

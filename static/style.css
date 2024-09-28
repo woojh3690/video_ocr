@@ -1,0 +1,61 @@
+#video-container {
+    position: relative;
+    display: inline-block;
+}
+
+#video {
+    display: block;
+}
+
+/* 바운딩 박스 스타일 */
+#bounding-box {
+    position: absolute;
+    border: 2px dashed red;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    box-sizing: border-box;
+    pointer-events: none; /* 마우스 이벤트를 비디오 컨트롤로 전달 */
+}
+
+/* 드래그 핸들 스타일 */
+.handle {
+    position: absolute;
+    background-color: blue;
+    opacity: 0.5;
+    z-index: 10;
+    pointer-events: auto; /* 핸들에만 마우스 이벤트 적용 */
+}
+
+.handle.top,
+.handle.bottom {
+    left: 0;
+    width: 100%;
+    height: 10px;
+    cursor: ns-resize;
+}
+
+.handle.top {
+    top: -5px;
+}
+
+.handle.bottom {
+    bottom: -5px;
+}
+
+.handle.left,
+.handle.right {
+    top: 0;
+    width: 10px;
+    height: 100%;
+    cursor: ew-resize;
+}
+
+.handle.left {
+    left: -5px;
+}
+
+.handle.right {
+    right: -5px;
+}

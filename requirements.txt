@@ -9,3 +9,8 @@ numpy==1.26.4
 thefuzz
 pandas
 opencv-python
+fastapi 
+uvicorn 
+jinja2 
+python-multipart
+aiofiles
