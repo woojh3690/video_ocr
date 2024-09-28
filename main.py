@@ -151,13 +151,17 @@ def process_ocr(video_filename, x, y, width, height):
     end_frame = total_frames - 1
 
     ocr_results = []
-    frame_number = start_frame
+    frame_number = -1
 
     cap.set(cv2.CAP_PROP_POS_FRAMES, start_frame)
 
     while cap.isOpened():
         ret, frame = cap.read()
+        frame_number += 1
         if ret:
+            if frame_number % 2 == 0:
+                continue
+
             if frame_number > end_frame:
                 break
 
@@ -171,11 +175,8 @@ def process_ocr(video_filename, x, y, width, height):
 
             ocr_results.append({'frame_number': frame_number, 'text': ocr_text})
 
-            frame_number += 1
-
             # 진행 상황 업데이트
             progress["value"] = int((frame_number / total_frames) * 100)
-
         else:
             break
 
