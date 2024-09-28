@@ -174,6 +174,21 @@ startOcrBtn.addEventListener('click', function() {
     });
 });
 
+function formatTime(seconds) {
+    // 초를 시간, 분, 초로 변환
+    let hrs = Math.floor(seconds / 3600);
+    let mins = Math.floor((seconds % 3600) / 60);
+    let secs = Math.floor(seconds % 60);
+
+    // 각 부분을 2자리 숫자로 변환 (ex: 5 -> "05")
+    let formattedHrs = hrs > 0 ? String(hrs).padStart(2, '0') + ':' : '';
+    let formattedMins = String(mins).padStart(2, '0');
+    let formattedSecs = String(secs).padStart(2, '0');
+
+    // 시간 형식 반환
+    return formattedHrs + formattedMins + ':' + formattedSecs;
+}
+
 function checkProgress() {
     let startTime = Date.now();
     progressInterval = setInterval(function() {
