@@ -29,9 +29,16 @@ async def read_root(request: Request):
 @app.post("/upload_video/")
 async def upload_video(file: UploadFile = File(...)):
     file_location = os.path.join(UPLOAD_DIR, file.filename)
+    
+    # 동일한 파일명이 존재하는 경우 업로드 스킵
+    if os.path.exists(file_location):
+        return {"filename": file.filename, "status": "skipped", "message": "File already exists."}
+    
+    # 파일 저장
     with open(file_location, "wb") as buffer:
         shutil.copyfileobj(file.file, buffer)
-    return {"filename": file.filename}
+    
+    return {"filename": file.filename, "status": "uploaded"}
 
 @app.get("/videos/{video_filename}")
 async def get_video(request: Request, video_filename: str):
