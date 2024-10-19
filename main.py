@@ -159,7 +159,7 @@ def process_ocr(video_filename, x, y, width, height):
         ret, frame = cap.read()
         frame_number += 1
         if ret:
-            if frame_number % 2 == 0:
+            if frame_number % 24 != 0:
                 continue
 
             if frame_number > end_frame:
