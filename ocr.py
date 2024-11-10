@@ -2,10 +2,11 @@ import os
 import cv2
 from PIL import Image
 import torch
-from thefuzz import fuzz
 from transformers import AutoModel, AutoTokenizer
 from transformers.models.qwen2.modeling_qwen2 import Qwen2ForCausalLM
 import csv
+
+from merging_module import merge_ocr_texts  # 모듈 임포트
 
 # 진행 상황과 OCR 결과를 저장하는 전역 변수 및 락
 progress = {}
@@ -40,15 +41,13 @@ def process_ocr(video_filename, x, y, width, height):
     frame_number = -1
     cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
 
-    current_subtitle = None
-
     while cap.isOpened():
         ret, frame = cap.read()
         frame_number += 1
         if ret:
             if frame_number % 24 != 0:
                 continue
-            
+
             frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
             image = Image.fromarray(frame_rgb)
 
@@ -57,27 +56,7 @@ def process_ocr(video_filename, x, y, width, height):
 
             # ocr_text 데이터를 저장
             current_time = frame_number / frame_rate
-            ocr_text_data.append({'time': frame_number / frame_rate, 'text': ocr_text})
-
-            current_time = frame_number / frame_rate
-
-            if current_subtitle is None:
-                current_subtitle = {
-                    'start_time': current_time,
-                    'end_time': current_time,
-                    'text': ocr_text
-                }
-            else:
-                similarity = fuzz.partial_ratio(current_subtitle['text'], ocr_text)
-                if similarity > 50:
-                    current_subtitle['end_time'] = current_time
-                else:
-                    ocr_progress_data.append(current_subtitle)
-                    current_subtitle = {
-                        'start_time': current_time,
-                        'end_time': current_time,
-                        'text': ocr_text
-                    }
+            ocr_text_data.append({'time': current_time, 'text': ocr_text})
 
             progress["value"] = int((frame_number / total_frames) * 100)
         else:
@@ -85,8 +64,8 @@ def process_ocr(video_filename, x, y, width, height):
 
     cap.release()
 
-    if current_subtitle:
-        ocr_progress_data.append(current_subtitle)
+    # 텍스트 병합 모듈 사용
+    ocr_progress_data = merge_ocr_texts(ocr_text_data)
 
     # SRT 파일 생성
     def format_time(seconds):
@@ -98,8 +77,7 @@ def process_ocr(video_filename, x, y, width, height):
 
     # 자막 생성
     with open(f'./uploads/{video_filename}.srt', 'w', encoding='utf-8') as f:
-        for idx, subtitle in enumerate(ocr_progress_data):
-            idx = idx+1
+        for idx, subtitle in enumerate(ocr_progress_data, start=1):
             start = format_time(subtitle['start_time'])
             end = format_time(subtitle['end_time'])
             f.write(f"{idx}\n")
