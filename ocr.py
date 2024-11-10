@@ -96,7 +96,8 @@ def process_ocr(video_filename, x, y, width, height):
         millis = int((seconds - int(seconds)) * 1000)
         return f"{hours:02}:{minutes:02}:{secs:02},{millis:03}"
 
-    with open('./uploads/output.srt', 'w', encoding='utf-8') as f:
+    # 자막 생성
+    with open(f'./uploads/{video_filename}.srt', 'w', encoding='utf-8') as f:
         for idx, subtitle in enumerate(ocr_progress_data):
             idx = idx+1
             start = format_time(subtitle['start_time'])
@@ -106,23 +107,11 @@ def process_ocr(video_filename, x, y, width, height):
             f.write(f"{subtitle['text']}\n\n")
 
     # CSV 파일 생성 (전체 OCR 텍스트 데이터 저장)
-    with open('./uploads/ocr_text_output.csv', 'w', newline='', encoding='utf-8') as csvfile:
+    with open(f'./uploads/{video_filename}.csv', 'w', newline='', encoding='utf-8') as csvfile:
         fieldnames = ['time', 'text']
         writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
         writer.writeheader()
         for entry in ocr_text_data:
             writer.writerow(entry)
-
-    # CSV 파일 생성 (자막 데이터 저장)
-    with open('./uploads/output.csv', 'w', newline='', encoding='utf-8') as csvfile:
-        fieldnames = ['start_time', 'end_time', 'text']
-        writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
-        writer.writeheader()
-        for subtitle in ocr_progress_data:
-            writer.writerow({
-                'start_time': format_time(subtitle['start_time']),
-                'end_time': format_time(subtitle['end_time']),
-                'text': subtitle['text']
-            })
 
     progress["value"] = 100
