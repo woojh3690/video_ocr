@@ -1,12 +1,17 @@
 import os
+import io
 import cv2
+import csv
+import json
 from PIL import Image
 import torch
 from transformers import AutoModel, AutoTokenizer
 from transformers.models.qwen2.modeling_qwen2 import Qwen2ForCausalLM
-import csv
+import ollama
 
 from merging_module import merge_ocr_texts  # 모듈 임포트
+
+is_ollama = True if os.environ["OLLAMA"].lower() == "true" else False
 
 # 진행 상황과 OCR 결과를 저장하는 전역 변수 및 락
 progress = {}
@@ -14,17 +19,43 @@ ocr_progress_data = []
 
 ocr_text_data = []
 
-device = 'cuda' if torch.cuda.is_available() else 'cpu'
-tokenizer = AutoTokenizer.from_pretrained('ucaslcl/GOT-OCR2_0', trust_remote_code=True)
-model: Qwen2ForCausalLM = AutoModel.from_pretrained(
-    'ucaslcl/GOT-OCR2_0',
-    trust_remote_code=True,
-    low_cpu_mem_usage=True,
-    device_map=device,
-    use_safetensors=True,
-    pad_token_id=tokenizer.eos_token_id
-)
-model = model.eval().to(device)
+if is_ollama:
+    client = ollama.Client("http://dev.iwaz.co.kr:5192")
+else:
+    device = 'cuda' if torch.cuda.is_available() else 'cpu'
+    tokenizer = AutoTokenizer.from_pretrained('ucaslcl/GOT-OCR2_0', trust_remote_code=True)
+    model: Qwen2ForCausalLM = AutoModel.from_pretrained(
+        'ucaslcl/GOT-OCR2_0',
+        trust_remote_code=True,
+        low_cpu_mem_usage=True,
+        device_map=device,
+        use_safetensors=True,
+        pad_token_id=tokenizer.eos_token_id
+    )
+    model = model.eval().to(device)
+
+def do_ocr(image) -> str:
+    if is_ollama:
+        img_byte_arr = io.BytesIO()
+        image.save(img_byte_arr, format='PNG')  # PNG 형식으로 변환
+        img_byte_arr.seek(0)  # 시작 위치로 포인터 이동
+
+        response = client.chat(
+            model='llama3.2-vision:90b',
+            messages=[{
+                'role': 'user',
+                'content': 'Extract all the text from image like {"extract":"ocr_text"}. If there is no text then {"extract":""}',
+                'images': [img_byte_arr.getvalue()]
+            }],
+            format="json",
+            stream=False,
+            options={'temperature': 0}
+        )
+        response = response['message']['content']
+        response = json.loads(response)["extract"]
+        return response
+    else:
+        return model.chat(tokenizer, image, ocr_type='ocr', gradio_input=True)
 
 def process_ocr(video_filename, x, y, width, height):
     UPLOAD_DIR = "uploads"
@@ -41,18 +72,24 @@ def process_ocr(video_filename, x, y, width, height):
     frame_number = -1
     cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
 
+    # 프레임 간격 계산
+    interval = 0.3  # 0.5초마다 OCR 수행
+    frame_interval = max(1, int(round(frame_rate * interval)))  # 최소 1프레임
+
     while cap.isOpened():
         ret, frame = cap.read()
         frame_number += 1
         if ret:
-            if frame_number % 24 != 0:
-                continue
+            if frame_number % frame_interval != 0:
+                continue  # 다음 프레임으로 넘어갑니다
 
+            # 이미지 크롭
             frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
             image = Image.fromarray(frame_rgb)
+            cropped_img = image.crop((x, y, x+width, y+height))
 
-            ocr_box = f'[{x},{y},{x+width},{y+height}]'
-            ocr_text = model.chat(tokenizer, image, ocr_type='ocr', ocr_box=ocr_box, gradio_input=True)
+            # OCR 수행
+            ocr_text = do_ocr(cropped_img)
 
             # ocr_text 데이터를 저장
             current_time = frame_number / frame_rate
