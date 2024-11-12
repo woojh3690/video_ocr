@@ -45,7 +45,7 @@ def do_ocr(image) -> str:
             model='llama3.2-vision:90b',
             messages=[{
                 'role': 'user',
-                'content': 'Extract all the text from image like {"extract":"ocr_text"}. If there is no text then {"extract":""}',
+                'content': 'Extract all the text and subtitle from image like {"extract":"first_line_subtitle\nsecond_line_subtitle"} JSON format. If there is no text then {"extract":""}',
                 'images': [img_byte_arr.getvalue()]
             }],
             format="json",
@@ -96,7 +96,7 @@ def process_ocr(video_filename, x, y, width, height):
             current_time = frame_number / frame_rate
             ocr_text_data.append({'time': current_time, 'text': ocr_text})
 
-            progress["value"] = int((frame_number / total_frames) * 100)
+            progress["value"] = (frame_number / total_frames) * 100
         else:
             break
 
