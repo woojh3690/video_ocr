@@ -12,7 +12,6 @@ import ollama
 from merging_module import merge_ocr_texts  # 모듈 임포트
 
 is_ollama = True if os.environ["OLLAMA"].lower() == "true" else False
-ollama_url = os.environ["OLLAMA_URL"]
 
 # 진행 상황과 OCR 결과를 저장하는 전역 변수 및 락
 progress = {}
@@ -21,6 +20,7 @@ ocr_progress_data = []
 ocr_text_data = []
 
 if is_ollama:
+    ollama_url = os.environ["OLLAMA_URL"]
     client = ollama.Client(ollama_url)
 else:
     device = 'cuda' if torch.cuda.is_available() else 'cpu'

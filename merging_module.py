@@ -38,7 +38,7 @@ def is_valid_text(text):
 
     return True
 
-def merge_ocr_texts(ocr_text_data, similarity_threshold=50):
+def merge_ocr_texts(ocr_text_data, similarity_threshold=70):
     ocr_progress_data = []
     current_subtitle = None
 
