@@ -18,20 +18,6 @@ def is_valid_text(text):
     if re.fullmatch(r'[\d\s%:/.\-+,]+', text):
         return False
 
-    # 비알파벳 문자 비율 검사
-    non_alnum_count = sum(1 for c in stripped_text if not c.isalnum())
-    if non_alnum_count / len(stripped_text) > 0.5:
-        return False
-
-    # 유니코드 범주 검사 (제어 문자 및 할당되지 않은 문자)
-    non_printable_count = 0
-    for c in stripped_text:
-        category = unicodedata.category(c)
-        if category.startswith('C'):  # 제어 문자 또는 기타
-            non_printable_count += 1
-    if non_printable_count / len(stripped_text) > 0.3:
-        return False
-
     # 반복되는 패턴 검사
     if re.fullmatch(r'(.)\1{2,}', stripped_text):
         return False
