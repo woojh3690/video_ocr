@@ -38,7 +38,7 @@ def is_valid_text(text):
 
     return True
 
-def merge_ocr_texts(ocr_text_data, similarity_threshold=60):
+def merge_ocr_texts(ocr_text_data, similarity_threshold=50):
     ocr_progress_data = []
     current_subtitle = None
 
@@ -57,7 +57,7 @@ def merge_ocr_texts(ocr_text_data, similarity_threshold=60):
                 'text': ocr_text
             }
         else:
-            similarity = fuzz.partial_ratio(current_subtitle['text'], ocr_text)
+            similarity = fuzz.ratio(current_subtitle['text'], ocr_text)
             if similarity > similarity_threshold:
                 current_subtitle['end_time'] = current_time
                 current_subtitle['text'] = ocr_text
