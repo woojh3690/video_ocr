@@ -1,7 +1,6 @@
 # text_merging_module.py
 from thefuzz import fuzz
 import re
-import unicodedata
 
 def is_valid_text(text):
     # 텍스트가 None이거나 빈 문자열인 경우
