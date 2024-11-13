@@ -13,10 +13,15 @@ from merging_module import merge_ocr_texts  # 모듈 임포트
 
 is_ollama = True if os.environ["OLLAMA"].lower() == "true" else False
 
-# 진행 상황과 OCR 결과를 저장하는 전역 변수 및 락
+system_prompt = 'Extract all the text and subtitle from the image in the format: {"extract":"first_line_subtitle\\nsecond_line_subtitle"}. \
+Ensure that line breaks are preserved. \
+If there is no text, then return {"extract":""}. \
+If there are any double quotation marks within the subtitle text, use escape characters (\\") to preserve them. \
+Output format must be JSON'
+
+# 진행 상황과 OCR 결과 저장
 progress = {}
 ocr_progress_data = []
-
 ocr_text_data = []
 
 if is_ollama:
@@ -43,9 +48,13 @@ def do_ocr(image) -> str:
 
         response = client.chat(
             model='llama3.2-vision:90b',
-            messages=[{
+            messages=[
+            {
+                'role': 'system',
+                'content': system_prompt,
+            },
+            {
                 'role': 'user',
-                'content': 'Extract all the text and subtitle from image like {"extract":"first_line_subtitle\nsecond_line_subtitle"} JSON format. If there is no text then {"extract":""}',
                 'images': [img_byte_arr.getvalue()]
             }],
             format="json",
