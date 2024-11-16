@@ -44,13 +44,13 @@ else:
 def normalize_to_nested_list(json_obj):
     # 단일 문자열을 [["text"]]로 변환
     if isinstance(json_obj, str):
-        return json.dumps([[json_obj]])
+        return [[json_obj]]
     
     # 리스트인지 확인
     if isinstance(json_obj, list):
         # 리스트 안에 중첩 리스트가 없으면 [["..."]]로 변환
         if not any(isinstance(i, list) for i in json_obj):
-            return json.dumps([json_obj])
+            return [json_obj]
     
     # 이미 올바른 형식이면 그대로 반환
     return json_obj
@@ -91,6 +91,9 @@ def do_ocr(image) -> str:
 
         if "no text" in result or "no subtitles" in result:
             result = ""
+
+        if "[" in result:
+            print("걸림")
         print(result)
         return result
     else:
