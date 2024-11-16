@@ -81,13 +81,13 @@ def process_ocr(video_filename, x, y, width, height):
     total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
 
     # 기존 OCR 데이터를 로드하여 진행 상황을 파악합니다.
-    processed_frames = set()
+    last_processed_frame_number = -1
     if os.path.exists(csv_path):
         with open(csv_path, 'r', encoding='utf-8') as csvfile:
             reader = csv.DictReader(csvfile)
             for row in reader:
                 frame_number = int(row['frame_number'])
-                processed_frames.add(frame_number)
+                last_processed_frame_number = max(last_processed_frame_number, frame_number)
                 ocr_text_data.append({
                     'time': float(row['time']),
                     'text': row['text'],
@@ -105,7 +105,7 @@ def process_ocr(video_filename, x, y, width, height):
     with open(csv_path, 'a', newline='', encoding='utf-8') as csvfile:
         fieldnames = ['frame_number', 'time', 'text']
         writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
-        if not processed_frames:
+        if last_processed_frame_number == -1:
             writer.writeheader()
 
         while cap.isOpened():
@@ -117,7 +117,7 @@ def process_ocr(video_filename, x, y, width, height):
             if frame_number % frame_interval != 0:
                 continue  # 다음 프레임으로 넘어갑니다
 
-            if frame_number in processed_frames:
+            if frame_number <= last_processed_frame_number:
                 continue  # 이미 처리된 프레임은 건너뜁니다
 
             # 이미지 크롭
