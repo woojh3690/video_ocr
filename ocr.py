@@ -61,7 +61,9 @@ def do_ocr(image) -> str:
             options={'temperature': 0}
         )
         content = response['message']['content']
-        return json.loads(content)["extract"]
+        content = json.loads(content)["extract"]
+        return content.replace('\n', '\\n')     # 줄바꿈 문자 이스케이프 처리
+            
     else:
         return model.chat(tokenizer, image, ocr_type='ocr', gradio_input=True)
 
@@ -126,10 +128,11 @@ def process_ocr(video_filename, x, y, width, height):
             cropped_img = image.crop((x, y, x+width, y+height))
 
             # OCR 수행
-            ocr_text = do_ocr(cropped_img)
-
-            # 줄바꿈 문자 이스케이프 처리
-            escaped_text = ocr_text.replace('\n', '\\n')
+            try:
+                ocr_text = do_ocr(cropped_img)
+            except Exception as e:
+                print(f"JSON 디코딩 오류 발생: {e}")
+                continue
 
             # ocr_text 데이터를 저장
             current_time = frame_number / frame_rate
