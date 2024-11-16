@@ -13,11 +13,13 @@ from merging_module import merge_ocr_texts  # 모듈 임포트
 
 is_ollama = True if os.environ["OLLAMA"].lower() == "true" else False
 
-system_prompt = 'Extract all the text and subtitle from the image in the format: {"extract":"first_line_subtitle\\nsecond_line_subtitle"}. \
-Ensure that line breaks are preserved. \
-If there is no text, then return {"extract":""}. \
-If there are any double quotation marks within the subtitle text, use escape characters (\\") to preserve them. \
-Output format must be JSON'
+system_prompt = 'Extract all the subtitles and text in JSON format. \
+Group the subtitles according to color of the subtitles; \
+subtitles with the same color belong to the same group. \
+Use the following JSON format: \n\n\
+{\"ocr_subtitles_group\":[[\"group1 first subtitle\",\"group1 second subtitle\",\"...\"],[\"group2 first subtitle\",\"group2 second subtitle\",\"...\"]]}\
+\nor\n\
+{\"ocr_subtitles_group\":[[]]}'
 
 # 진행 상황과 OCR 결과 저장
 progress = {}
@@ -39,6 +41,20 @@ else:
     )
     model = model.eval().to(device)
 
+def normalize_to_nested_list(json_obj):
+    # 단일 문자열을 [["text"]]로 변환
+    if isinstance(json_obj, str):
+        return json.dumps([[json_obj]])
+    
+    # 리스트인지 확인
+    if isinstance(json_obj, list):
+        # 리스트 안에 중첩 리스트가 없으면 [["..."]]로 변환
+        if not any(isinstance(i, list) for i in json_obj):
+            return json.dumps([json_obj])
+    
+    # 이미 올바른 형식이면 그대로 반환
+    return json_obj
+
 def do_ocr(image) -> str:
     if is_ollama:
         img_byte_arr = io.BytesIO()
@@ -48,22 +64,32 @@ def do_ocr(image) -> str:
         response = client.chat(
             model='llama3.2-vision:90b',
             messages=[
-            {
-                'role': 'system',
-                'content': system_prompt,
-            },
-            {
-                'role': 'user',
-                'images': [img_byte_arr.getvalue()]
-            }],
+                {
+                    'role': 'system',
+                    'content': system_prompt,
+                },
+                {
+                    'role': 'user',
+                    'images': [img_byte_arr.getvalue()]
+                }
+            ],
             format="json",
             stream=False,
-            options={'temperature': 0}
+            options={
+                'temperature': 0,
+                'num_predict': 512
+            }
         )
         content = response['message']['content']
-        content = json.loads(content)["extract"]
-        return content.replace('\n', '\\n')     # 줄바꿈 문자 이스케이프 처리
-            
+        ocr_subtitles_group = json.loads(content)["ocr_subtitles_group"]
+        ocr_subtitles_group = normalize_to_nested_list(ocr_subtitles_group)
+
+        merged_subtitle = []
+        for subtitles in ocr_subtitles_group:
+            merged_subtitle.append("\n".join(subtitles))
+        result = "\n\n".join(merged_subtitle)
+        print(result)
+        return result
     else:
         return model.chat(tokenizer, image, ocr_type='ocr', gradio_input=True)
 
@@ -119,31 +145,33 @@ def process_ocr(video_filename, x, y, width, height):
             if frame_number % frame_interval != 0:
                 continue  # 다음 프레임으로 넘어갑니다
 
-            if frame_number <= last_processed_frame_number:
-                continue  # 이미 처리된 프레임은 건너뜁니다
+            # 처리된 않은 프레임 부터 OCR 진행
+            if frame_number > last_processed_frame_number:
+                # 이미지 크롭
+                frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+                image = Image.fromarray(frame_rgb)
+                cropped_img = image.crop((x, y, x+width, y+height))
 
-            # 이미지 크롭
-            frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-            image = Image.fromarray(frame_rgb)
-            cropped_img = image.crop((x, y, x+width, y+height))
+                # OCR 수행
+                try:
+                    ocr_text = do_ocr(cropped_img)
+                except Exception as e:
+                    print(f"JSON 디코딩 오류 발생: {e}")
+                    continue
 
-            # OCR 수행
-            try:
-                ocr_text = do_ocr(cropped_img)
-            except Exception as e:
-                print(f"JSON 디코딩 오류 발생: {e}")
-                continue
+                # 줄바꿈 문자 이스케이프 처리 
+                ocr_text = ocr_text.replace('\n', '\\n')
 
-            # ocr_text 데이터를 저장
-            current_time = frame_number / frame_rate
-            entry = {'frame_number': frame_number, 'time': current_time, 'text': escaped_text}
-            ocr_text_data.append({
-                'time': current_time,
-                'text': ocr_text,  # 원본 텍스트를 저장
-                'frame_number': frame_number
-            })
-            writer.writerow(entry)
-            csvfile.flush()  # 버퍼를 즉시 파일에 씁니다.
+                # ocr_text 데이터를 저장
+                current_time = frame_number / frame_rate
+                entry = {'frame_number': frame_number, 'time': current_time, 'text': ocr_text}
+                ocr_text_data.append({
+                    'time': current_time,
+                    'text': ocr_text,  # 원본 텍스트를 저장
+                    'frame_number': frame_number
+                })
+                writer.writerow(entry)
+                csvfile.flush()  # 버퍼를 즉시 파일에 씁니다.
 
             progress["value"] = (frame_number / total_frames) * 100
 
