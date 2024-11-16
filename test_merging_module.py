@@ -30,9 +30,10 @@ def test_merge_ocr_texts_from_csv(csv_filename):
         for idx, subtitle in enumerate(merged_subtitles, start=1):
             start = format_time(subtitle['start_time'])
             end = format_time(subtitle['end_time'])
+            subtitle_line = subtitle['text'].replace("\\n", "\n")
             f.write(f"{idx}\n")
             f.write(f"{start} --> {end}\n")
-            f.write(f"{subtitle['text']}\n\n")
+            f.write(f"{subtitle_line}\n\n")
 
 if __name__ == "__main__":
     # 메인 Tk 창 생성

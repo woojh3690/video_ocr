@@ -193,8 +193,9 @@ def process_ocr(video_filename, x, y, width, height):
         for idx, subtitle in enumerate(ocr_progress_data, start=1):
             start = format_time(subtitle['start_time'])
             end = format_time(subtitle['end_time'])
+            subtitle_line = subtitle['text'].replace("\\n", "\n")
             f.write(f"{idx}\n")
             f.write(f"{start} --> {end}\n")
-            f.write(f"{subtitle['text']}\n\n")
+            f.write(f"{subtitle_line}\n\n")
 
     progress["value"] = 100
