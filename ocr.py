@@ -88,6 +88,9 @@ def do_ocr(image) -> str:
         for subtitles in ocr_subtitles_group:
             merged_subtitle.append("\n".join(subtitles))
         result = "\n\n".join(merged_subtitle)
+
+        if "no text" in result or "no subtitles" in result:
+            result = ""
         print(result)
         return result
     else:
