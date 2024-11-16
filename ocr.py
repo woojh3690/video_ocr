@@ -60,9 +60,8 @@ def do_ocr(image) -> str:
             stream=False,
             options={'temperature': 0}
         )
-        response = response['message']['content']
-        response = json.loads(response)["extract"]
-        return response
+        content = response['message']['content']
+        return json.loads(content)["extract"]
     else:
         return model.chat(tokenizer, image, ocr_type='ocr', gradio_input=True)
 
