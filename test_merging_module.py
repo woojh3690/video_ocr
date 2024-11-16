@@ -6,6 +6,8 @@ from tkinter.filedialog import askopenfilename
 from merging_module import merge_ocr_texts
 
 def test_merge_ocr_texts_from_csv(csv_filename):
+    if csv_filename == "": return
+    
     ocr_text_data = []
     with open(csv_filename, 'r', encoding='utf-8') as csvfile:
         reader = csv.DictReader(csvfile)
