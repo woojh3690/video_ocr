@@ -84,17 +84,15 @@ def do_ocr(image) -> str:
         ocr_subtitles_group = json.loads(content)["ocr_subtitles_group"]
         ocr_subtitles_group = normalize_to_nested_list(ocr_subtitles_group)
 
+        # 줄 병합
         merged_subtitle = []
         for subtitles in ocr_subtitles_group:
             merged_subtitle.append("\n".join(subtitles))
         result = "\n\n".join(merged_subtitle)
 
+        # LLM 이 자막이 없다고 출력하는 경우 필터링
         if "no text" in result or "no subtitles" in result:
             result = ""
-
-        if "[" in result:
-            print("걸림")
-        print(result)
         return result
     else:
         return model.chat(tokenizer, image, ocr_type='ocr', gradio_input=True)
