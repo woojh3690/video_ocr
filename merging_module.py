@@ -27,13 +27,15 @@ def merge_ocr_texts(ocr_text_data, similarity_threshold=70):
     ocr_progress_data = []
     current_subtitle = None
 
+    none_subtitle_interval = 0  # 이전 자막 공백 카운트
     for entry in ocr_text_data:
         current_time = entry['time']
         ocr_text = entry['text']
 
-        # 텍스트 필터링 적용
+        # 유효하지 않은 자막은 건너뜀
         if not is_valid_text(ocr_text):
-            continue  # 유효하지 않은 텍스트는 건너뜁니다.
+            none_subtitle_interval += 1
+            continue
 
         if current_subtitle is None:
             current_subtitle = {
@@ -42,8 +44,9 @@ def merge_ocr_texts(ocr_text_data, similarity_threshold=70):
                 'text': ocr_text
             }
         else:
+            # 자막 유사성 및 자막 공백 카운트를 고려하여 자막 병합
             similarity = fuzz.ratio(current_subtitle['text'], ocr_text)
-            if similarity > similarity_threshold:
+            if similarity > similarity_threshold and none_subtitle_interval < 8:
                 current_subtitle['end_time'] = current_time
                 current_subtitle['text'] = ocr_text
             else:
@@ -53,6 +56,8 @@ def merge_ocr_texts(ocr_text_data, similarity_threshold=70):
                     'end_time': current_time,
                     'text': ocr_text
                 }
+        none_subtitle_interval = 0
+    
     if current_subtitle:
         ocr_progress_data.append(current_subtitle)
 
