@@ -5,4 +5,5 @@ test_image/
 *.mp4
 *.pkl
 *.csv
+*.gguf
 test.py

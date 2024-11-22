@@ -1,101 +1,125 @@
 import os
 import io
-import cv2
+import sys
 import csv
 import json
+import base64
+
+import cv2
 from PIL import Image
-import torch
-from transformers import AutoModel, AutoTokenizer
-from transformers.models.qwen2.modeling_qwen2 import Qwen2ForCausalLM
-import ollama
+from llama_cpp import Llama
+from llama_cpp.llama_chat_format import MiniCPMv26ChatHandler
 
 from merging_module import merge_ocr_texts  # 모듈 임포트
 
-is_ollama = True if os.environ["OLLAMA"].lower() == "true" else False
-
-system_prompt = 'Extract all the subtitles and text in JSON format. \
+system_prompt = 'You are a ocr assistant. Extract all the subtitles and text in JSON format. \
 Group the subtitles according to color of the subtitles; \
-subtitles with the same color belong to the same group. \
-Use the following JSON format: \n\n\
-{\"ocr_subtitles_group\":[[\"group1 first subtitle\",\"group1 second subtitle\",\"...\"],[\"group2 first subtitle\",\"group2 second subtitle\",\"...\"]]}\
-\nor\n\
-{\"ocr_subtitles_group\":[[]]}'
+subtitles with the same color belong to the same group.\n\
+Use the following JSON format: {\"ocr_subtitles_group\":[[\"group1 first subtitle\",\"group1 second subtitle\",\"...\"],\
+[\"group2 first subtitle\",\"group2 second subtitle\",\"...\"]]}\n\
+If there is no subtitles then: {\"ocr_subtitles_group\":[]}'
+
+class SuppressStdoutStderr(object):
+    def __enter__(self):
+        self.outnull_file = open(os.devnull, 'w')
+        self.errnull_file = open(os.devnull, 'w')
+
+        self.old_stdout_fileno_undup    = sys.stdout.fileno()
+        self.old_stderr_fileno_undup    = sys.stderr.fileno()
+
+        self.old_stdout_fileno = os.dup ( sys.stdout.fileno() )
+        self.old_stderr_fileno = os.dup ( sys.stderr.fileno() )
+
+        self.old_stdout = sys.stdout
+        self.old_stderr = sys.stderr
+
+        os.dup2 ( self.outnull_file.fileno(), self.old_stdout_fileno_undup )
+        os.dup2 ( self.errnull_file.fileno(), self.old_stderr_fileno_undup )
+
+        sys.stdout = self.outnull_file        
+        sys.stderr = self.errnull_file
+        return self
+
+    def __exit__(self, *_):        
+        sys.stdout = self.old_stdout
+        sys.stderr = self.old_stderr
+
+        os.dup2 ( self.old_stdout_fileno, self.old_stdout_fileno_undup )
+        os.dup2 ( self.old_stderr_fileno, self.old_stderr_fileno_undup )
+
+        os.close ( self.old_stdout_fileno )
+        os.close ( self.old_stderr_fileno )
+
+        self.outnull_file.close()
+        self.errnull_file.close()
+
+with SuppressStdoutStderr():
+    chat_handler = MiniCPMv26ChatHandler(clip_model_path="models/mmproj-model-f16.gguf")
+    llm = Llama(
+        model_path="models/ggml-model-Q8_0.gguf",
+        chat_handler=chat_handler,
+        n_ctx=16384,
+        n_gpu_layers=-1,
+        verbose=False,
+    )
 
 # 진행 상황과 OCR 결과 저장
 progress = {}
 ocr_text_data = []
 
-if is_ollama:
-    ollama_url = os.environ["OLLAMA_URL"]
-    client = ollama.Client(ollama_url)
-else:
-    device = 'cuda' if torch.cuda.is_available() else 'cpu'
-    tokenizer = AutoTokenizer.from_pretrained('ucaslcl/GOT-OCR2_0', trust_remote_code=True)
-    model: Qwen2ForCausalLM = AutoModel.from_pretrained(
-        'ucaslcl/GOT-OCR2_0',
-        trust_remote_code=True,
-        low_cpu_mem_usage=True,
-        device_map=device,
-        use_safetensors=True,
-        pad_token_id=tokenizer.eos_token_id
-    )
-    model = model.eval().to(device)
-
-def normalize_to_nested_list(json_obj):
-    # 단일 문자열을 [["text"]]로 변환
-    if isinstance(json_obj, str):
-        return [[json_obj]]
-    
-    # 리스트인지 확인
-    if isinstance(json_obj, list):
-        # 리스트 안에 중첩 리스트가 없으면 [["..."]]로 변환
-        if not any(isinstance(i, list) for i in json_obj):
-            return [json_obj]
-    
-    # 이미 올바른 형식이면 그대로 반환
-    return json_obj
-
 def do_ocr(image) -> str:
-    if is_ollama:
-        img_byte_arr = io.BytesIO()
-        image.save(img_byte_arr, format='PNG')  # PNG 형식으로 변환
-        img_byte_arr.seek(0)  # 시작 위치로 포인터 이동
+    img_byte_arr = io.BytesIO()
+    image.save(img_byte_arr, format='PNG')  # PNG 형식으로 변환
+    img_byte_arr.seek(0)  # 시작 위치로 포인터 이동
 
-        response = client.chat(
-            model='llama3.2-vision:90b',
-            messages=[
+    # 메모리에 저장된 이미지를 Base64로 인코딩
+    image_base64 = base64.b64encode(img_byte_arr.read()).decode('utf-8')
+    image_base64 = f"data:image/jpg;base64,{image_base64}"
+
+    with SuppressStdoutStderr():
+        response = llm.create_chat_completion(
+            messages = [
                 {
-                    'role': 'system',
-                    'content': system_prompt,
+                    "role": "system",
+                    "content": system_prompt,
                 },
                 {
-                    'role': 'user',
-                    'images': [img_byte_arr.getvalue()]
-                }
+                    "role": "user", 
+                    "content": [{"type": "image_url", "image_url": {"url": image_base64}}]
+                },
             ],
-            format="json",
-            stream=False,
-            options={
-                'temperature': 0,
-                'num_predict': 512
-            }
+            response_format = {
+                "type": "json_object",
+                "schema": {
+                    "type": "object",
+                    "properties": {
+                        "ocr_subtitles_group": {
+                            "type": "array",
+                            "items": {
+                                "type": "array",
+                                "items": {
+                                    "type": "string"
+                                }
+                            }
+                        }
+                    },
+                    "required": [
+                        "ocr_subtitles_group"
+                    ]
+                },
+            },
+            temperature=0.0,
         )
-        content = response['message']['content']
-        ocr_subtitles_group = json.loads(content)["ocr_subtitles_group"]
-        ocr_subtitles_group = normalize_to_nested_list(ocr_subtitles_group)
 
-        # 줄 병합
-        merged_subtitle = []
-        for subtitles in ocr_subtitles_group:
-            merged_subtitle.append("\n".join(subtitles))
-        result = "\n\n".join(merged_subtitle)
+    content = response["choices"][0]["message"]["content"]
+    ocr_subtitles_group = json.loads(content)["ocr_subtitles_group"]
 
-        # LLM 이 자막이 없다고 출력하는 경우 필터링
-        if "no text" in result or "no subtitles" in result:
-            result = ""
-        return result
-    else:
-        return model.chat(tokenizer, image, ocr_type='ocr', gradio_input=True)
+    # 줄 병합
+    merged_subtitle = []
+    for subtitles in ocr_subtitles_group:
+        merged_subtitle.append("\n".join(subtitles))
+    result = "\n\n".join(merged_subtitle)
+    return result
 
 def process_ocr(video_filename, x, y, width, height):
     UPLOAD_DIR = "uploads"

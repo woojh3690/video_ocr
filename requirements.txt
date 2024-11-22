@@ -1,17 +1,10 @@
---extra-index-url https://download.pytorch.org/whl/cu124
-torch
-torchvision
-transformers
-tiktoken
-verovio
-accelerate
-numpy
+--extra-index-url https://abetlen.github.io/llama-cpp-python/whl/cu124
+llama-cpp-python -C cmake.args="-DGGML_CUDA=on"
+pillow
 thefuzz
-pandas
 opencv-python
 fastapi 
 uvicorn 
 jinja2 
 python-multipart
 aiofiles
-ollama
