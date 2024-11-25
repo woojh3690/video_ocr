@@ -76,9 +76,9 @@ def process_ocr(video_filename, x, y, width, height):
                 frame_number = int(row['frame_number'])
                 last_processed_frame_number = max(last_processed_frame_number, frame_number)
                 ocr_text_data.append({
+                    'frame_number': frame_number,
                     'time': float(row['time']),
                     'text': row['text'],
-                    'frame_number': frame_number
                 })
 
     frame_number = -1
@@ -138,15 +138,18 @@ def process_ocr(video_filename, x, y, width, height):
         # 모든 작업이 완료될 때까지 결과 처리
         while task_result := result_queue.get():
             result_frame_number, ocr_text = task_result
-            current_time = result_frame_number / frame_rate
+
+            # 전처리
+            ocr_text = ocr_text.replace('\n', '\\n')        # 줄바꿈 문자 이스케이프 처리 
+            current_time = round(result_frame_number / frame_rate, 3)
             entry = {'frame_number': result_frame_number, 'time': current_time, 'text': ocr_text}
-            ocr_text_data.append({
-                'time': current_time,
-                'text': ocr_text,  # 원본 텍스트를 저장
-                'frame_number': result_frame_number
-            })
+
+            # 버퍼를 즉시 파일에 쓰기
+            ocr_text_data.append(entry)
             writer.writerow(entry)
             csvfile.flush()  # 버퍼를 즉시 파일에 씁니다.
+
+            # 진행률 업데이트
             progress["value"] = (result_frame_number / total_frames) * 100
 
     # 텍스트 병합 모듈 사용
