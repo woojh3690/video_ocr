@@ -1,6 +1,7 @@
 .vscode/
 __pycache__/
 test_image/
+few_shot/
 *.srt
 *.mp4
 *.pkl

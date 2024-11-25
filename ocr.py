@@ -1,125 +1,49 @@
 import os
-import io
-import sys
 import csv
-import json
-import base64
 
 import cv2
+import torch
 from PIL import Image
-from llama_cpp import Llama
-from llama_cpp.llama_chat_format import MiniCPMv26ChatHandler
+from transformers import AutoModel, AutoTokenizer, Qwen2PreTrainedModel
 
 from merging_module import merge_ocr_texts  # 모듈 임포트
 
-system_prompt = 'You are a ocr assistant. Extract all the subtitles and text in JSON format. \
-Group the subtitles according to color of the subtitles; \
-subtitles with the same color belong to the same group.\n\
-Use the following JSON format: {\"ocr_subtitles_group\":[[\"group1 first subtitle\",\"group1 second subtitle\",\"...\"],\
-[\"group2 first subtitle\",\"group2 second subtitle\",\"...\"]]}\n\
-If there is no subtitles then: {\"ocr_subtitles_group\":[]}'
+system_prompt = 'Extract all the subtitles and text from image. \
+If there is no visible text in this image then output: None'
 
-class SuppressStdoutStderr(object):
-    def __enter__(self):
-        self.outnull_file = open(os.devnull, 'w')
-        self.errnull_file = open(os.devnull, 'w')
-
-        self.old_stdout_fileno_undup    = sys.stdout.fileno()
-        self.old_stderr_fileno_undup    = sys.stderr.fileno()
-
-        self.old_stdout_fileno = os.dup ( sys.stdout.fileno() )
-        self.old_stderr_fileno = os.dup ( sys.stderr.fileno() )
-
-        self.old_stdout = sys.stdout
-        self.old_stderr = sys.stderr
-
-        os.dup2 ( self.outnull_file.fileno(), self.old_stdout_fileno_undup )
-        os.dup2 ( self.errnull_file.fileno(), self.old_stderr_fileno_undup )
-
-        sys.stdout = self.outnull_file        
-        sys.stderr = self.errnull_file
-        return self
-
-    def __exit__(self, *_):        
-        sys.stdout = self.old_stdout
-        sys.stderr = self.old_stderr
-
-        os.dup2 ( self.old_stdout_fileno, self.old_stdout_fileno_undup )
-        os.dup2 ( self.old_stderr_fileno, self.old_stderr_fileno_undup )
-
-        os.close ( self.old_stdout_fileno )
-        os.close ( self.old_stderr_fileno )
-
-        self.outnull_file.close()
-        self.errnull_file.close()
-
-with SuppressStdoutStderr():
-    chat_handler = MiniCPMv26ChatHandler(clip_model_path="models/mmproj-model-f16.gguf")
-    llm = Llama(
-        model_path="models/ggml-model-Q8_0.gguf",
-        chat_handler=chat_handler,
-        n_ctx=16384,
-        n_gpu_layers=-1,
-        verbose=False,
-    )
+model = AutoModel.from_pretrained('openbmb/MiniCPM-V-2_6', trust_remote_code=True,
+    attn_implementation='flash_attention_2', torch_dtype=torch.bfloat16) # sdpa or flash_attention_2
+model: Qwen2PreTrainedModel = model.eval().cuda()
+tokenizer = AutoTokenizer.from_pretrained('openbmb/MiniCPM-V-2_6', trust_remote_code=True)
 
 # 진행 상황과 OCR 결과 저장
 progress = {}
 ocr_text_data = []
 
+# few-shot 예제 로딩
+few_shot_data = []
+i = 0
+with open('answer.txt', 'r', encoding="utf-8") as file:
+    for line in file:
+        shot_image = Image.open(f'./few_shot/shot{i}.jpg').convert('RGB')
+        answer = line.strip() 
+        few_shot_data.append({'role': 'user', 'content': [shot_image, system_prompt]})
+        few_shot_data.append({'role': 'assistant', 'content': [answer]})
+        i += 1
+
 def do_ocr(image) -> str:
-    img_byte_arr = io.BytesIO()
-    image.save(img_byte_arr, format='PNG')  # PNG 형식으로 변환
-    img_byte_arr.seek(0)  # 시작 위치로 포인터 이동
+    msgs = few_shot_data
+    msgs.append({'role': 'user', 'content': [image, system_prompt]})
 
-    # 메모리에 저장된 이미지를 Base64로 인코딩
-    image_base64 = base64.b64encode(img_byte_arr.read()).decode('utf-8')
-    image_base64 = f"data:image/jpg;base64,{image_base64}"
+    response = model.chat(
+        image=None,
+        msgs=msgs,
+        tokenizer=tokenizer,
+    )
 
-    with SuppressStdoutStderr():
-        response = llm.create_chat_completion(
-            messages = [
-                {
-                    "role": "system",
-                    "content": system_prompt,
-                },
-                {
-                    "role": "user", 
-                    "content": [{"type": "image_url", "image_url": {"url": image_base64}}]
-                },
-            ],
-            response_format = {
-                "type": "json_object",
-                "schema": {
-                    "type": "object",
-                    "properties": {
-                        "ocr_subtitles_group": {
-                            "type": "array",
-                            "items": {
-                                "type": "array",
-                                "items": {
-                                    "type": "string"
-                                }
-                            }
-                        }
-                    },
-                    "required": [
-                        "ocr_subtitles_group"
-                    ]
-                },
-            },
-            temperature=0.0,
-        )
-
-    content = response["choices"][0]["message"]["content"]
-    ocr_subtitles_group = json.loads(content)["ocr_subtitles_group"]
-
-    # 줄 병합
-    merged_subtitle = []
-    for subtitles in ocr_subtitles_group:
-        merged_subtitle.append("\n".join(subtitles))
-    result = "\n\n".join(merged_subtitle)
-    return result
+    if response == "None" or response == "(None)" or "image does not contain any" in response:
+        response = ""
+    return response
 
 def process_ocr(video_filename, x, y, width, height):
     UPLOAD_DIR = "uploads"
@@ -136,7 +60,7 @@ def process_ocr(video_filename, x, y, width, height):
     frame_rate = cap.get(cv2.CAP_PROP_FPS)
     total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
 
-    # 기존 OCR 데이터를 로드하여 진행 상황을 파악합니다.
+    # 기존 OCR 데이터를 로드하여 진행 상황을 파악
     last_processed_frame_number = -1
     if os.path.exists(csv_path):
         with open(csv_path, 'r', encoding='utf-8') as csvfile:
@@ -157,7 +81,7 @@ def process_ocr(video_filename, x, y, width, height):
     interval = 0.3  # 0.3초마다 OCR 수행
     frame_interval = max(1, int(round(frame_rate * interval)))  # 최소 1프레임
 
-    # CSV 파일을 열어둔 채로 진행합니다.
+    # CSV 파일을 열어둔 채로 진행
     with open(csv_path, 'a', newline='', encoding='utf-8') as csvfile:
         fieldnames = ['frame_number', 'time', 'text']
         writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
@@ -178,11 +102,11 @@ def process_ocr(video_filename, x, y, width, height):
                 # 이미지 크롭
                 frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
                 image = Image.fromarray(frame_rgb)
-                cropped_img = image.crop((x, y, x+width, y+height))
+                # cropped_img = image.crop((x, y, x+width, y+height))
 
                 # OCR 수행
                 try:
-                    ocr_text = do_ocr(cropped_img)
+                    ocr_text = do_ocr(image)
                 except Exception as e:
                     print(f"JSON 디코딩 오류 발생: {e}")
                     continue
@@ -202,7 +126,6 @@ def process_ocr(video_filename, x, y, width, height):
                 csvfile.flush()  # 버퍼를 즉시 파일에 씁니다.
 
             progress["value"] = (frame_number / total_frames) * 100
-
     cap.release()
 
     # 텍스트 병합 모듈 사용
