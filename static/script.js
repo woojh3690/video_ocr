@@ -22,6 +22,7 @@ let startLeft = 0;
 
 let progressInterval; // 진행 체크를 위한 interval 변수 추가
 
+vfilename = null
 document.getElementById('video-upload').addEventListener('change', function(e) {
     videoFile = e.target.files[0];
     if (videoFile) {
@@ -34,6 +35,7 @@ document.getElementById('video-upload').addEventListener('change', function(e) {
         }).then(response => response.json())
         .then(data => {
             // 비디오를 서버에서 불러오기
+            vfilename = data.filename
             let url = `/videos/${data.filename}`;
             video.src = url;
             video.load();
@@ -224,5 +226,5 @@ function checkProgress() {
 }
 
 downloadBtn.addEventListener('click', function() {
-    window.location.href = '/download_srt/';
+    window.location.href = `/download_srt/${vfilename}`;
 });

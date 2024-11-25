@@ -101,10 +101,11 @@ async def start_ocr(video_filename: str = Form(...),
 async def get_progress():
     return {"progress": progress.get("value", 0)}
 
-@app.get("/download_srt/")
-async def download_srt():
-    srt_file = "output.srt"
+@app.get("/download_srt/{video_filename}")
+async def download_srt(video_filename: str):
+    srt_file = f"./uploads/{video_filename}.srt"
+    print(srt_file)
     if os.path.exists(srt_file):
-        return FileResponse(srt_file, media_type='application/octet-stream', filename=srt_file)
+        return FileResponse(srt_file, media_type='application/octet-stream', filename=f"{video_filename}.srt")
     else:
         return {"error": "SRT file not found"}
