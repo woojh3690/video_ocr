@@ -1,5 +1,7 @@
 import os
 import csv
+import threading
+import queue
 
 import cv2
 import torch
@@ -31,7 +33,7 @@ i = 0
 with open('./few_shot/answer.txt', 'r', encoding="utf-8") as file:
     for line in file:
         shot_image = Image.open(f'./few_shot/shot{i}.jpg').convert('RGB')
-        answer = line.strip() 
+        answer = line.strip()
         few_shot_data.append({'role': 'user', 'content': [shot_image, system_prompt]})
         few_shot_data.append({'role': 'assistant', 'content': [answer]})
         i += 1
@@ -86,6 +88,27 @@ def process_ocr(video_filename, x, y, width, height):
     interval = 0.3  # 0.3초마다 OCR 수행
     frame_interval = max(1, int(round(frame_rate * interval)))  # 최소 1프레임
 
+    # 작업 큐와 결과 큐 생성
+    task_queue = queue.Queue()
+    result_queue = queue.Queue()
+
+    # 워커 함수 정의
+    def ocr_worker():
+        while True:
+            task = task_queue.get()
+            if task is None: break
+            frame_num, image = task
+            try:
+                ocr_text = do_ocr(image)
+                result_queue.put((frame_num, ocr_text))
+            except Exception as e:
+                print(f"OCR 오류 발생 (프레임 {frame_num}): {e}")
+        result_queue.put(None)  # 워커 스레드 종료 신호 보내기
+
+    # 워커 스레드 시작
+    worker_thread = threading.Thread(target=ocr_worker)
+    worker_thread.start()
+    
     # CSV 파일을 열어둔 채로 진행
     with open(csv_path, 'a', newline='', encoding='utf-8') as csvfile:
         fieldnames = ['frame_number', 'time', 'text']
@@ -95,43 +118,36 @@ def process_ocr(video_filename, x, y, width, height):
 
         while cap.isOpened():
             ret, frame = cap.read()
+            if not ret: break
             frame_number += 1
-            if not ret:
-                break
 
             if frame_number % frame_interval != 0:
                 continue  # 다음 프레임으로 넘어갑니다
 
-            # 처리된 않은 프레임 부터 OCR 진행
+            # 처리되지 않은 프레임부터 OCR 진행
             if frame_number > last_processed_frame_number:
                 # 이미지 크롭
                 frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
                 image = Image.fromarray(frame_rgb)
                 # cropped_img = image.crop((x, y, x+width, y+height))
 
-                # OCR 수행
-                try:
-                    ocr_text = do_ocr(image)
-                except Exception as e:
-                    print(f"JSON 디코딩 오류 발생: {e}")
-                    continue
+                task_queue.put((frame_number, image))   # 작업 큐에 작업 추가
+        task_queue.put(None)    # 작업 종료
+        cap.release()
 
-                # 줄바꿈 문자 이스케이프 처리 
-                ocr_text = ocr_text.replace('\n', '\\n')
-
-                # ocr_text 데이터를 저장
-                current_time = frame_number / frame_rate
-                entry = {'frame_number': frame_number, 'time': current_time, 'text': ocr_text}
-                ocr_text_data.append({
-                    'time': current_time,
-                    'text': ocr_text,  # 원본 텍스트를 저장
-                    'frame_number': frame_number
-                })
-                writer.writerow(entry)
-                csvfile.flush()  # 버퍼를 즉시 파일에 씁니다.
-
-            progress["value"] = (frame_number / total_frames) * 100
-    cap.release()
+        # 모든 작업이 완료될 때까지 결과 처리
+        while task_result := result_queue.get():
+            result_frame_number, ocr_text = task_result
+            current_time = result_frame_number / frame_rate
+            entry = {'frame_number': result_frame_number, 'time': current_time, 'text': ocr_text}
+            ocr_text_data.append({
+                'time': current_time,
+                'text': ocr_text,  # 원본 텍스트를 저장
+                'frame_number': result_frame_number
+            })
+            writer.writerow(entry)
+            csvfile.flush()  # 버퍼를 즉시 파일에 씁니다.
+            progress["value"] = (result_frame_number / total_frames) * 100
 
     # 텍스트 병합 모듈 사용
     ocr_progress_data = merge_ocr_texts(ocr_text_data)
