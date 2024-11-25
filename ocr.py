@@ -23,7 +23,7 @@ ocr_text_data = []
 # few-shot 예제 로딩
 few_shot_data = []
 i = 0
-with open('answer.txt', 'r', encoding="utf-8") as file:
+with open('./few_shot/answer.txt', 'r', encoding="utf-8") as file:
     for line in file:
         shot_image = Image.open(f'./few_shot/shot{i}.jpg').convert('RGB')
         answer = line.strip() 
@@ -32,7 +32,7 @@ with open('answer.txt', 'r', encoding="utf-8") as file:
         i += 1
 
 def do_ocr(image) -> str:
-    msgs = few_shot_data
+    msgs = few_shot_data[:]
     msgs.append({'role': 'user', 'content': [image, system_prompt]})
 
     response = model.chat(
