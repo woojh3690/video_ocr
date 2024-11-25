@@ -11,10 +11,15 @@ from merging_module import merge_ocr_texts  # 모듈 임포트
 system_prompt = 'Extract all the subtitles and text from image. \
 If there is no visible text in this image then output: None'
 
-model = AutoModel.from_pretrained('openbmb/MiniCPM-V-2_6', trust_remote_code=True,
-    attn_implementation='flash_attention_2', torch_dtype=torch.bfloat16) # sdpa or flash_attention_2
+model_id = "openbmb/MiniCPM-V-2_6"
+model = AutoModel.from_pretrained(
+    model_id, 
+    trust_remote_code=True,
+    attn_implementation='flash_attention_2', # sdpa or flash_attention_2
+    torch_dtype=torch.bfloat16
+)
 model: Qwen2PreTrainedModel = model.eval().cuda()
-tokenizer = AutoTokenizer.from_pretrained('openbmb/MiniCPM-V-2_6', trust_remote_code=True)
+tokenizer = AutoTokenizer.from_pretrained(model_id, trust_remote_code=True)
 
 # 진행 상황과 OCR 결과 저장
 progress = {}
