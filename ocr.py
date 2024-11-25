@@ -4,7 +4,7 @@ import csv
 import cv2
 import torch
 from PIL import Image
-from transformers import AutoModel, AutoTokenizer, Qwen2PreTrainedModel
+from transformers import AutoModel, AutoTokenizer
 
 from merging_module import merge_ocr_texts  # 모듈 임포트
 
@@ -18,7 +18,7 @@ model = AutoModel.from_pretrained(
     attn_implementation='flash_attention_2', # sdpa or flash_attention_2
     torch_dtype=torch.bfloat16
 )
-model: Qwen2PreTrainedModel = model.eval().cuda()
+model = model.eval().cuda()
 tokenizer = AutoTokenizer.from_pretrained(model_id, trust_remote_code=True)
 
 # 진행 상황과 OCR 결과 저장
