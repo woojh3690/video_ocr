@@ -1,7 +1,5 @@
 import os
 import csv
-import threading
-import queue
 
 import cv2
 import torch
@@ -37,38 +35,67 @@ with open('./few_shot/answer.txt', 'r', encoding="utf-8") as file:
         few_shot_data.append({'role': 'assistant', 'content': [answer]})
         i += 1
 
-def do_ocr(image) -> str:
-    msgs = few_shot_data[:]
-    msgs.append({'role': 'user', 'content': [image, system_prompt]})
+def do_ocr(images) -> str:
+    msgs = []
+    for image in images:
+        msg = few_shot_data[:]
+        msg.append({'role': 'user', 'content': [image, system_prompt]})
+        msgs.append(msg)
 
-    response = model.chat(
+    responses = model.chat(
         image=None,
         msgs=msgs,
         tokenizer=tokenizer,
     )
 
-    if response == "None" or response == "(None)" or "image does not contain any" in response:
-        response = ""
-    return response
+    return responses
 
-def process_ocr(video_filename, x, y, width, height):
-    UPLOAD_DIR = "uploads"
-    video_path = os.path.join(UPLOAD_DIR, video_filename)
-    csv_path = os.path.join(UPLOAD_DIR, f"{video_filename}.csv")
-    srt_path = os.path.join(UPLOAD_DIR, f"{video_filename}.srt")
+# 동영상 파일에서 프레임을 배치 단위로 생성하는 제너레이터.
+def frame_batch_generator(cap: cv2.VideoCapture, last_frame_number: int, batch_size=8):
+    last_frame_number = -1 if last_frame_number == None else last_frame_number
 
-    cap = cv2.VideoCapture(video_path)
-
-    if not cap.isOpened():
-        print("비디오 파일을 열 수 없습니다.")
-        return
-
+    interval = 0.3  # 0.3초마다 OCR 수행
     frame_rate = cap.get(cv2.CAP_PROP_FPS)
-    total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+    frame_interval = max(1, int(round(frame_rate * interval)))  # 최소 1프레임
 
+    frame_number = -1
+    batch = []
+    while True:
+        # 프레임 읽기
+        ret, frame = cap.read()
+        if not ret:
+            cap.release()
+            break
+        frame_number += 1
+
+        # 처리된 않은 프레임 부터 OCR 진행
+        if frame_number <= last_frame_number:
+            continue
+        
+        # 0.3초마다 OCR 수행
+        if frame_number % frame_interval != 0:
+            continue
+
+        # 이미지 크롭
+        frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+        image = Image.fromarray(frame_rgb)
+        # cropped_img = image.crop((x, y, x+width, y+height))
+
+        # 배치 추가
+        batch.append([frame_number, image])
+
+        # 배치가 꽉 찼다면 반환
+        if len(batch) >= batch_size:
+            yield batch
+            batch = []
+    # 남은 프레임 반환
+    yield batch
+
+def get_last_processed_frame_number(csv_path):
     # 기존 OCR 데이터를 로드하여 진행 상황을 파악
-    last_processed_frame_number = -1
+    last_processed_frame_number = None
     if os.path.exists(csv_path):
+        last_processed_frame_number = -1
         with open(csv_path, 'r', encoding='utf-8') as csvfile:
             reader = csv.DictReader(csvfile)
             for row in reader:
@@ -79,77 +106,56 @@ def process_ocr(video_filename, x, y, width, height):
                     'time': float(row['time']),
                     'text': row['text'],
                 })
+    return last_processed_frame_number
 
-    frame_number = -1
+def process_ocr(video_filename, x, y, width, height):
+    UPLOAD_DIR = "uploads"
+    video_path = os.path.join(UPLOAD_DIR, video_filename)
+    csv_path = os.path.join(UPLOAD_DIR, f"{video_filename}.csv")
+    srt_path = os.path.join(UPLOAD_DIR, f"{video_filename}.srt")
+
+    cap = cv2.VideoCapture(video_path)
+    if not cap.isOpened():
+        raise ValueError(f"Cannot open video file: {video_path}")
     cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
 
-    # 프레임 간격 계산
-    interval = 0.3  # 0.3초마다 OCR 수행
-    frame_interval = max(1, int(round(frame_rate * interval)))  # 최소 1프레임
+    # 영상 정보 추출
+    total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+    frame_rate = cap.get(cv2.CAP_PROP_FPS)
 
-    # 작업 큐와 결과 큐 생성
-    task_queue = queue.Queue()
-    result_queue = queue.Queue()
-
-    # 워커 함수 정의
-    def ocr_worker():
-        while True:
-            task = task_queue.get()
-            if task is None: break
-            frame_num, image = task
-            try:
-                ocr_text = do_ocr(image)
-                result_queue.put((frame_num, ocr_text))
-            except Exception as e:
-                print(f"OCR 오류 발생 (프레임 {frame_num}): {e}")
-        result_queue.put(None)  # 워커 스레드 종료 신호 보내기
-
-    # 워커 스레드 시작
-    worker_thread = threading.Thread(target=ocr_worker)
-    worker_thread.start()
-    
     # CSV 파일을 열어둔 채로 진행
+    last_processed_frame_number = get_last_processed_frame_number(csv_path)
     with open(csv_path, 'a', newline='', encoding='utf-8') as csvfile:
         fieldnames = ['frame_number', 'time', 'text']
         writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
-        if last_processed_frame_number == -1:
+        if last_processed_frame_number == None:
             writer.writeheader()
 
-        while cap.isOpened():
-            ret, frame = cap.read()
-            if not ret: break
-            frame_number += 1
+        for frames in frame_batch_generator(cap, last_processed_frame_number):
+            images = [frame[1] for frame in frames]
 
-            if frame_number % frame_interval != 0:
-                continue  # 다음 프레임으로 넘어갑니다
+            # OCR 수행
+            ocr_texts = do_ocr(images)
 
-            # 처리되지 않은 프레임부터 OCR 진행
-            if frame_number > last_processed_frame_number:
-                # 이미지 크롭
-                frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-                image = Image.fromarray(frame_rgb)
-                # cropped_img = image.crop((x, y, x+width, y+height))
+            for i, ocr_text in enumerate(ocr_texts):
+                # 후처리 
+                if ocr_text == "None" or ocr_text == "(None)" or "image does not contain any" in ocr_text:
+                    ocr_text = ""
+                ocr_text = ocr_text.replace('\n', '\\n')    # 줄바꿈 문자 이스케이프 처리
 
-                task_queue.put((frame_number, image))   # 작업 큐에 작업 추가
-        task_queue.put(None)    # 작업 종료
-        cap.release()
-
-        # 모든 작업이 완료될 때까지 결과 처리
-        while task_result := result_queue.get():
-            result_frame_number, ocr_text = task_result
-
-            # 전처리
-            ocr_text = ocr_text.replace('\n', '\\n')        # 줄바꿈 문자 이스케이프 처리 
-            current_time = round(result_frame_number / frame_rate, 3)
-            entry = {'frame_number': result_frame_number, 'time': current_time, 'text': ocr_text}
-
-            # 버퍼를 즉시 파일에 쓰기
-            ocr_text_data.append(entry)
-            writer.writerow(entry)
+                # CSV 파일에 쓰기
+                fram_number = frames[i][0]
+                entry = {
+                    'frame_number': fram_number, 
+                    'time': round(fram_number / frame_rate, 3), 
+                    'text': ocr_text
+                }
+                ocr_text_data.append(entry)
+                writer.writerow(entry)
             csvfile.flush()  # 버퍼를 즉시 파일에 씁니다.
 
-            # 진행률 업데이트
-            progress["value"] = (result_frame_number / total_frames) * 100
+            # 진행 상황 업데이트
+            progress["value"] = (frames[-1][0] / total_frames) * 100
 
     # 텍스트 병합 모듈 사용
     ocr_progress_data = merge_ocr_texts(ocr_text_data)
