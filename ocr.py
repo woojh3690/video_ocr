@@ -11,11 +11,16 @@ from merging_module import merge_ocr_texts  # 모듈 임포트
 system_prompt = 'Extract all the subtitles and text from image. \
 If there is no visible text in this image then output: None'
 
-model_id = "openbmb/MiniCPM-V-2_6-int4"
+if torch.cuda.is_available():
+    model_id = "openbmb/MiniCPM-V-2_6-int4"
+    attn_impl = "flash_attention_2"
+else:
+    model_id = "openbmb/MiniCPM-V-2_6"
+    attn_impl = "sdpa"
 model = AutoModel.from_pretrained(
     model_id, 
     trust_remote_code=True,
-    attn_implementation='flash_attention_2', # sdpa or flash_attention_2
+    attn_implementation=attn_impl,
     torch_dtype=torch.bfloat16
 )
 tokenizer = AutoTokenizer.from_pretrained(model_id, trust_remote_code=True)
