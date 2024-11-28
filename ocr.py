@@ -28,30 +28,12 @@ tokenizer = AutoTokenizer.from_pretrained(model_id, trust_remote_code=True)
 
 # 진행 상황과 OCR 결과 저장
 progress = {}
-ocr_text_data = []
 
-# few-shot 예제 로딩
-few_shot_data = []
-i = 0
-with open('./few_shot/answer.txt', 'r', encoding="utf-8") as file:
-    for line in file:
-        shot_image = Image.open(f'./few_shot/shot{i}.jpg').convert('RGB')
-        answer = line.strip()
-        few_shot_data.append({'role': 'user', 'content': [shot_image, system_prompt]})
-        few_shot_data.append({'role': 'assistant', 'content': [answer]})
-        i += 1
-
-def do_ocr(images: List[Image.Image]) -> List[str]:
-    msgs = []
-    for image in images:
-        msg = few_shot_data[:]
-        msg.append({'role': 'user', 'content': [image, system_prompt]})
-        msgs.append(msg)
-
+def do_ocr(msgs: List[List]) -> List[str]:
     return model.chat(
         image=None,
         msgs=msgs,
-        tokenizer=tokenizer,
+        tokenizer=tokenizer
     )
 
 # 동영상 파일에서 프레임을 배치 단위로 생성하는 제너레이터.
@@ -99,9 +81,10 @@ def frame_batch_generator(
     # 남은 프레임 반환
     yield batch
 
-def get_last_processed_frame_number(csv_path) -> int:
+def get_processed_data(csv_path) -> tuple[int, List]:
     # 기존 OCR 데이터를 로드하여 진행 상황을 파악
     last_processed_frame_number = None
+    ocr_text_data = []
     if os.path.exists(csv_path):
         last_processed_frame_number = -1
         with open(csv_path, 'r', encoding='utf-8') as csvfile:
@@ -114,13 +97,23 @@ def get_last_processed_frame_number(csv_path) -> int:
                     'time': float(row['time']),
                     'text': row['text'],
                 })
-    return last_processed_frame_number
+    return last_processed_frame_number, ocr_text_data
 
 def process_ocr(video_filename, x, y, width, height):
+    # 파일 경로 정보 초기화
     UPLOAD_DIR = "uploads"
     video_path = os.path.join(UPLOAD_DIR, video_filename)
     csv_path = os.path.join(UPLOAD_DIR, f"{video_filename}.csv")
     srt_path = os.path.join(UPLOAD_DIR, f"{video_filename}.srt")
+
+    # few-shot 예제 로딩
+    few_shot_data = []
+    with open('./few_shot/answer.txt', 'r', encoding="utf-8") as file:
+        for i, line in enumerate(file):
+            shot_image = Image.open(f'./few_shot/shot{i}.jpg').convert('RGB')
+            answer = line.strip()
+            few_shot_data.append({'role': 'user', 'content': [shot_image, system_prompt]})
+            few_shot_data.append({'role': 'assistant', 'content': [answer]})
 
     cap = cv2.VideoCapture(video_path)
     if not cap.isOpened():
@@ -132,18 +125,22 @@ def process_ocr(video_filename, x, y, width, height):
     frame_rate = cap.get(cv2.CAP_PROP_FPS)
 
     # CSV 파일을 열어둔 채로 진행
-    last_processed_frame_number = get_last_processed_frame_number(csv_path)
+    last_frame_number, ocr_text_data = get_processed_data(csv_path)
     with open(csv_path, 'a', newline='', encoding='utf-8') as csvfile:
         fieldnames = ['frame_number', 'time', 'text']
         writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
-        if last_processed_frame_number == None:
+        if last_frame_number == None:
             writer.writeheader()
 
-        for frames in frame_batch_generator(cap, last_processed_frame_number):
-            images = [frame[1] for frame in frames]
+        for frames in frame_batch_generator(cap, last_frame_number):
+            msgs = []
+            for frame in frames:
+                msg = few_shot_data[:]
+                msg.append({'role': 'user', 'content': [frame[1], system_prompt]})
+                msgs.append(msg)
 
             # OCR 수행
-            ocr_texts = do_ocr(images)
+            ocr_texts = do_ocr(msgs)
 
             for i, ocr_text in enumerate(ocr_texts):
                 # 후처리
