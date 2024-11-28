@@ -1,5 +1,6 @@
 import os
 import csv
+from typing import List, Generator
 
 import cv2
 import torch
@@ -40,23 +41,25 @@ with open('./few_shot/answer.txt', 'r', encoding="utf-8") as file:
         few_shot_data.append({'role': 'assistant', 'content': [answer]})
         i += 1
 
-def do_ocr(images) -> str:
+def do_ocr(images: List[Image.Image]) -> List[str]:
     msgs = []
     for image in images:
         msg = few_shot_data[:]
         msg.append({'role': 'user', 'content': [image, system_prompt]})
         msgs.append(msg)
 
-    responses = model.chat(
+    return model.chat(
         image=None,
         msgs=msgs,
         tokenizer=tokenizer,
     )
 
-    return responses
-
 # 동영상 파일에서 프레임을 배치 단위로 생성하는 제너레이터.
-def frame_batch_generator(cap: cv2.VideoCapture, last_frame_number: int, batch_size=8):
+def frame_batch_generator(
+    cap: cv2.VideoCapture, 
+    last_frame_number: int, 
+    batch_size=8
+) -> Generator[List[List], None, None]:
     last_frame_number = -1 if last_frame_number == None else last_frame_number
 
     interval = 0.3  # 0.3초마다 OCR 수행
@@ -96,7 +99,7 @@ def frame_batch_generator(cap: cv2.VideoCapture, last_frame_number: int, batch_s
     # 남은 프레임 반환
     yield batch
 
-def get_last_processed_frame_number(csv_path):
+def get_last_processed_frame_number(csv_path) -> int:
     # 기존 OCR 데이터를 로드하여 진행 상황을 파악
     last_processed_frame_number = None
     if os.path.exists(csv_path):
@@ -143,7 +146,8 @@ def process_ocr(video_filename, x, y, width, height):
             ocr_texts = do_ocr(images)
 
             for i, ocr_text in enumerate(ocr_texts):
-                # 후처리 
+                # 후처리
+                ocr_text = ocr_text.strip()
                 if ocr_text == "None" or ocr_text == "(None)" or "image does not contain any" in ocr_text:
                     ocr_text = ""
                 ocr_text = ocr_text.replace('\n', '\\n')    # 줄바꿈 문자 이스케이프 처리
