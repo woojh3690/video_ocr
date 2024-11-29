@@ -103,9 +103,10 @@ async def get_progress():
 
 @app.get("/download_srt/{video_filename}")
 async def download_srt(video_filename: str):
-    srt_file = f"./uploads/{video_filename}.srt"
-    print(srt_file)
+    video_filename = os.path.splitext(os.path.basename(video_filename))[0]
+    subtitle_name = f"{video_filename}.srt"
+    srt_file = f"./uploads/{subtitle_name}"
     if os.path.exists(srt_file):
-        return FileResponse(srt_file, media_type='application/octet-stream', filename=f"{video_filename}.srt")
+        return FileResponse(srt_file, media_type='application/octet-stream', filename=subtitle_name)
     else:
         return {"error": "SRT file not found"}

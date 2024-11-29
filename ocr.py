@@ -103,8 +103,9 @@ def process_ocr(video_filename, x, y, width, height):
     # 파일 경로 정보 초기화
     UPLOAD_DIR = "uploads"
     video_path = os.path.join(UPLOAD_DIR, video_filename)
-    csv_path = os.path.join(UPLOAD_DIR, f"{video_filename}.csv")
-    srt_path = os.path.join(UPLOAD_DIR, f"{video_filename}.srt")
+    filename_without_ext = os.path.splitext(os.path.basename(video_filename))[0]
+    csv_path = os.path.join(UPLOAD_DIR, f"{filename_without_ext}.csv")
+    srt_path = os.path.join(UPLOAD_DIR, f"{filename_without_ext}.srt")
 
     # few-shot 예제 로딩
     few_shot_data = []
