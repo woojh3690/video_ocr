@@ -1,6 +1,6 @@
 import os
 import csv
-from typing import List, Generator
+from typing import List
 import multiprocessing as mp
 
 import cv2
@@ -19,11 +19,16 @@ progress = {}
 # 동영상 파일에서 프레임을 배치 단위로 생성하는 제너레이터.
 def frame_batch_producer(
     queue: mp.Queue,
-    cap: cv2.VideoCapture, 
+    video_path: str,
     last_frame_number: int, 
     batch_size=8
 ) -> None:
     last_frame_number = -1 if last_frame_number == None else last_frame_number
+
+    cap = cv2.VideoCapture(video_path)
+    if not cap.isOpened():
+        raise ValueError(f"Cannot open video file: {video_path}")
+    cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
 
     interval = 0.3  # 0.3초마다 OCR 수행
     frame_rate = cap.get(cv2.CAP_PROP_FPS)
@@ -131,14 +136,13 @@ def process_ocr(video_filename, x, y, width, height):
     csv_path = os.path.join(UPLOAD_DIR, f"{filename_without_ext}.csv")
     srt_path = os.path.join(UPLOAD_DIR, f"{filename_without_ext}.srt")
 
+    # 영상 정보 추출
     cap = cv2.VideoCapture(video_path)
     if not cap.isOpened():
         raise ValueError(f"Cannot open video file: {video_path}")
-    cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
-
-    # 영상 정보 추출
     total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
     frame_rate = cap.get(cv2.CAP_PROP_FPS)
+    cap.release()
 
     # 마지막으로 처리된 프레임 정보 로드
     last_frame_number, ocr_text_data = get_processed_data(csv_path)
@@ -148,7 +152,7 @@ def process_ocr(video_filename, x, y, width, height):
     result_queue = mp.Queue()
 
     # 프로세스 생성
-    frame_batch_process = mp.Process(target=frame_batch_producer, args=(frame_queue, cap, last_frame_number))
+    frame_batch_process = mp.Process(target=frame_batch_producer, args=(frame_queue, video_path, last_frame_number))
     consumer_process = mp.Process(target=do_ocr, args=(frame_queue, result_queue))
 
     # 프로세스 시작
