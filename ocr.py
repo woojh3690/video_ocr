@@ -1,6 +1,7 @@
 import os
 import csv
 from typing import List, Generator
+import multiprocessing as mp
 
 import cv2
 import torch
@@ -12,44 +13,34 @@ from merging_module import merge_ocr_texts  # 모듈 임포트
 system_prompt = 'Extract all the subtitles and text from image. \
 If there is no visible text in this image then output: None'
 
-if torch.cuda.is_available():
-    model_id = "openbmb/MiniCPM-V-2_6-int4"
-    attn_impl = "flash_attention_2"
-else:
-    model_id = "openbmb/MiniCPM-V-2_6"
-    attn_impl = "sdpa"
-model = AutoModel.from_pretrained(
-    model_id, 
-    trust_remote_code=True,
-    attn_implementation=attn_impl,
-    torch_dtype=torch.bfloat16
-)
-tokenizer = AutoTokenizer.from_pretrained(model_id, trust_remote_code=True)
-
 # 진행 상황과 OCR 결과 저장
 progress = {}
 
-def do_ocr(msgs: List[List]) -> List[str]:
-    return model.chat(
-        image=None,
-        msgs=msgs,
-        tokenizer=tokenizer
-    )
-
 # 동영상 파일에서 프레임을 배치 단위로 생성하는 제너레이터.
-def frame_batch_generator(
+def frame_batch_producer(
+    queue: mp.Queue,
     cap: cv2.VideoCapture, 
     last_frame_number: int, 
     batch_size=8
-) -> Generator[List[List], None, None]:
+) -> None:
     last_frame_number = -1 if last_frame_number == None else last_frame_number
 
     interval = 0.3  # 0.3초마다 OCR 수행
     frame_rate = cap.get(cv2.CAP_PROP_FPS)
     frame_interval = max(1, int(round(frame_rate * interval)))  # 최소 1프레임
 
-    frame_number = -1
+    # few-shot 예제 로딩
+    few_shot_data = []
+    with open('./few_shot/answer.txt', 'r', encoding="utf-8") as file:
+        for i, line in enumerate(file):
+            shot_image = Image.open(f'./few_shot/shot{i}.jpg').convert('RGB')
+            answer = line.strip()
+            few_shot_data.append({'role': 'user', 'content': [shot_image, system_prompt]})
+            few_shot_data.append({'role': 'assistant', 'content': [answer]})
+
+    frame_numbers = []
     batch = []
+    frame_number = -1
     while True:
         # 프레임 읽기
         ret, frame = cap.read()
@@ -72,14 +63,47 @@ def frame_batch_generator(
         # cropped_img = image.crop((x, y, x+width, y+height))
 
         # 배치 추가
-        batch.append([frame_number, image])
+        frame_numbers.append(frame_number)
+        msg = few_shot_data[:]
+        msg.append({'role': 'user', 'content': [image, system_prompt]})
+        batch.append(msg)
 
         # 배치가 꽉 찼다면 반환
         if len(batch) >= batch_size:
-            yield batch
+            queue.put((frame_numbers, batch))
+            frame_numbers = []
             batch = []
     # 남은 프레임 반환
-    yield batch
+    if len(batch) > 0:
+        queue.put((frame_numbers, batch))
+    # 모든 프레임 처리 완료 None
+    queue.put(None)
+
+def do_ocr(frame_queue: mp.Queue, result_queue: mp.Queue) -> None:
+    if torch.cuda.is_available():
+        model_id = "openbmb/MiniCPM-V-2_6-int4"
+        attn_impl = "flash_attention_2"
+    else:
+        model_id = "openbmb/MiniCPM-V-2_6"
+        attn_impl = "sdpa"
+    model = AutoModel.from_pretrained(
+        model_id, 
+        trust_remote_code=True,
+        attn_implementation=attn_impl,
+        torch_dtype=torch.bfloat16
+    )
+    tokenizer = AutoTokenizer.from_pretrained(model_id, trust_remote_code=True)
+
+    while item := frame_queue.get():
+        frame_numbers, batch = item
+        res = model.chat(
+            image=None,
+            msgs=batch,
+            tokenizer=tokenizer
+        )
+        result_queue.put((frame_numbers, res))
+    # 모든 프레임 처리 완료 None
+    result_queue.put(None)
 
 def get_processed_data(csv_path) -> tuple[int, List]:
     # 기존 OCR 데이터를 로드하여 진행 상황을 파악
@@ -107,15 +131,6 @@ def process_ocr(video_filename, x, y, width, height):
     csv_path = os.path.join(UPLOAD_DIR, f"{filename_without_ext}.csv")
     srt_path = os.path.join(UPLOAD_DIR, f"{filename_without_ext}.srt")
 
-    # few-shot 예제 로딩
-    few_shot_data = []
-    with open('./few_shot/answer.txt', 'r', encoding="utf-8") as file:
-        for i, line in enumerate(file):
-            shot_image = Image.open(f'./few_shot/shot{i}.jpg').convert('RGB')
-            answer = line.strip()
-            few_shot_data.append({'role': 'user', 'content': [shot_image, system_prompt]})
-            few_shot_data.append({'role': 'assistant', 'content': [answer]})
-
     cap = cv2.VideoCapture(video_path)
     if not cap.isOpened():
         raise ValueError(f"Cannot open video file: {video_path}")
@@ -125,25 +140,33 @@ def process_ocr(video_filename, x, y, width, height):
     total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
     frame_rate = cap.get(cv2.CAP_PROP_FPS)
 
-    # CSV 파일을 열어둔 채로 진행
+    # 마지막으로 처리된 프레임 정보 로드
     last_frame_number, ocr_text_data = get_processed_data(csv_path)
+
+    # 큐 생성
+    frame_queue = mp.Queue(maxsize=20)  # 적절한 크기로 설정
+    result_queue = mp.Queue()
+
+    # 프로세스 생성
+    frame_batch_process = mp.Process(target=frame_batch_producer, args=(frame_queue, cap, last_frame_number))
+    consumer_process = mp.Process(target=do_ocr, args=(frame_queue, result_queue))
+
+    # 프로세스 시작
+    frame_batch_process.start()
+    consumer_process.start()
+
+    # CSV 파일을 열어둔 채로 진행
+    
     with open(csv_path, 'a', newline='', encoding='utf-8') as csvfile:
         fieldnames = ['frame_number', 'time', 'text']
         writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
         if last_frame_number == None:
             writer.writeheader()
 
-        for frames in frame_batch_generator(cap, last_frame_number):
-            msgs = []
-            for frame in frames:
-                msg = few_shot_data[:]
-                msg.append({'role': 'user', 'content': [frame[1], system_prompt]})
-                msgs.append(msg)
+        while item := result_queue.get():
+            frame_numbers, ocr_texts = item
 
-            # OCR 수행
-            ocr_texts = do_ocr(msgs)
-
-            for i, ocr_text in enumerate(ocr_texts):
+            for frame_number, ocr_text in zip(frame_numbers, ocr_texts):
                 # 후처리
                 ocr_text = ocr_text.strip()
                 if ocr_text == "None" or ocr_text == "(None)" or "image does not contain any" in ocr_text:
@@ -151,10 +174,9 @@ def process_ocr(video_filename, x, y, width, height):
                 ocr_text = ocr_text.replace('\n', '\\n')    # 줄바꿈 문자 이스케이프 처리
 
                 # CSV 파일에 쓰기
-                fram_number = frames[i][0]
                 entry = {
-                    'frame_number': fram_number, 
-                    'time': round(fram_number / frame_rate, 3), 
+                    'frame_number': frame_number, 
+                    'time': round(frame_number / frame_rate, 3), 
                     'text': ocr_text
                 }
                 ocr_text_data.append(entry)
@@ -162,7 +184,7 @@ def process_ocr(video_filename, x, y, width, height):
             csvfile.flush()  # 버퍼를 즉시 파일에 씁니다.
 
             # 진행 상황 업데이트
-            progress["value"] = (frames[-1][0] / total_frames) * 100
+            progress["value"] = (frame_numbers[-1] / total_frames) * 100
 
     # 텍스트 병합 모듈 사용
     ocr_progress_data = merge_ocr_texts(ocr_text_data)

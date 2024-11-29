@@ -48,7 +48,6 @@ async def get_video(request: Request, video_filename: str):
 
     file_size = os.path.getsize(video_path)
     headers = {}
-    status_code = 200
 
     range_header = request.headers.get('range')
     if range_header:
@@ -68,7 +67,6 @@ async def get_video(request: Request, video_filename: str):
             headers['Content-Range'] = f'bytes {start}-{end}/{file_size}'
             headers['Accept-Ranges'] = 'bytes'
             headers['Content-Length'] = str(content_length)
-            status_code = 206
 
             async def stream_video():
                 async with aiofiles.open(video_path, 'rb') as f:
@@ -83,7 +81,7 @@ async def get_video(request: Request, video_filename: str):
                         yield data
                         bytes_to_read -= len(data)
 
-            return StreamingResponse(stream_video(), status_code=status_code, headers=headers, media_type="video/mp4")
+            return StreamingResponse(stream_video(), status_code=206, headers=headers, media_type="video/mp4")
     else:
         headers['Accept-Ranges'] = 'bytes'
         return FileResponse(video_path, headers=headers, media_type='video/mp4')
