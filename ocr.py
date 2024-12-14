@@ -79,7 +79,8 @@ def frame_batch_generator(
             yield batch
             batch = []
     # 남은 프레임 반환
-    yield batch
+    if len(batch) > 0:
+        yield batch
 
 def get_processed_data(csv_path) -> tuple[int, List]:
     # 기존 OCR 데이터를 로드하여 진행 상황을 파악
