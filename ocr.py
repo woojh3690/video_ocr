@@ -40,6 +40,7 @@ def do_ocr(msgs: List[List]) -> List[str]:
 def frame_batch_generator(
     cap: cv2.VideoCapture, 
     last_frame_number: int, 
+    x, y, width, height,
     batch_size=8
 ) -> Generator[List[List], None, None]:
     last_frame_number = -1 if last_frame_number == None else last_frame_number
@@ -69,7 +70,7 @@ def frame_batch_generator(
         # 이미지 크롭
         frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
         image = Image.fromarray(frame_rgb)
-        # cropped_img = image.crop((x, y, x+width, y+height))
+        image = image.crop((x, y, x+width, y+height))
 
         # 배치 추가
         batch.append([frame_number, image])
@@ -134,7 +135,7 @@ def process_ocr(video_filename, x, y, width, height):
         if last_frame_number == None:
             writer.writeheader()
 
-        for frames in frame_batch_generator(cap, last_frame_number):
+        for frames in frame_batch_generator(cap, last_frame_number, x, y, width, height):
             msgs = []
             for frame in frames:
                 msg = few_shot_data[:]
