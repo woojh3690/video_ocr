@@ -1,11 +1,13 @@
 import os
 import csv
 from typing import List, Generator
+from enum import Enum
+from pydantic import BaseModel
 
 import cv2
 import torch
 from PIL import Image
-from transformers import AutoModel, AutoTokenizer
+from outlines import models, generate
 
 from merging_module import merge_ocr_texts  # 모듈 임포트
 
@@ -18,23 +20,35 @@ if torch.cuda.is_available():
 else:
     model_id = "openbmb/MiniCPM-V-2_6"
     attn_impl = "sdpa"
-model = AutoModel.from_pretrained(
-    model_id, 
-    trust_remote_code=True,
-    attn_implementation=attn_impl,
-    torch_dtype=torch.bfloat16
+
+model = models.transformers(model_id, 
+    model_kwargs = {
+        "trust_remote_code": True,
+        "attn_implementation": attn_impl,
+        "torch_dtype": torch.bfloat16
+    },
+    tokenizer_kwargs = {
+        "trust_remote_code": True
+    }
 )
-tokenizer = AutoTokenizer.from_pretrained(model_id, trust_remote_code=True)
+
+class SubtitleType(str, Enum):
+    narration = "narration"
+    speaker = "speaker"
+    background = "background"
+    other = "other"
+    
+class Subtitle(BaseModel):
+    type: SubtitleType
+    lines: List[str]
+
+class Subtitles(BaseModel):
+    subtitles: List[Subtitle]
+
+generator = generate.json(model, Subtitles)
 
 # 진행 상황과 OCR 결과 저장
 progress = {}
-
-def do_ocr(msgs: List[List]) -> List[str]:
-    return model.chat(
-        image=None,
-        msgs=msgs,
-        tokenizer=tokenizer
-    )
 
 # 동영상 파일에서 프레임을 배치 단위로 생성하는 제너레이터.
 def frame_batch_generator(
@@ -143,7 +157,8 @@ def process_ocr(video_filename, x, y, width, height):
                 msgs.append(msg)
 
             # OCR 수행
-            ocr_texts = do_ocr(msgs)
+            ocr_texts: Subtitles = generator(msgs)
+            ocr_texts = ocr_texts.subtitles
 
             for i, ocr_text in enumerate(ocr_texts):
                 # 후처리
