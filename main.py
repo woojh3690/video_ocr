@@ -2,6 +2,7 @@ import os
 import re
 import shutil
 import threading
+import asyncio
 
 from fastapi import FastAPI, UploadFile, File, Form, HTTPException, Request
 from fastapi.responses import HTMLResponse, StreamingResponse, FileResponse
@@ -71,17 +72,21 @@ async def get_video(request: Request, video_filename: str):
             status_code = 206
 
             async def stream_video():
-                async with aiofiles.open(video_path, 'rb') as f:
-                    await f.seek(start)
-                    bytes_to_read = content_length
-                    chunk_size = 1024 * 1024  # 1MB
-                    while bytes_to_read > 0:
-                        read_size = min(chunk_size, bytes_to_read)
-                        data = await f.read(read_size)
-                        if not data:
-                            break
-                        yield data
-                        bytes_to_read -= len(data)
+                try:
+                    async with aiofiles.open(video_path, 'rb') as f:
+                        await f.seek(start)
+                        bytes_to_read = content_length
+                        chunk_size = 1024 * 1024  # 1MB
+                        while bytes_to_read > 0:
+                            read_size = min(chunk_size, bytes_to_read)
+                            data = await f.read(read_size)
+                            if not data:
+                                break
+                            yield data
+                            bytes_to_read -= len(data)
+                except asyncio.CancelledError:
+                    print("Stream cancelled by client.")
+                    raise
 
             return StreamingResponse(stream_video(), status_code=status_code, headers=headers, media_type="video/mp4")
     else:
