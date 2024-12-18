@@ -11,8 +11,9 @@ from outlines import models, generate
 
 from merging_module import merge_ocr_texts  # 모듈 임포트
 
-system_prompt = 'Extract all the subtitles and text from image. \
-If there is no visible text in this image then output: None'
+system_prompt = 'Extract all the subtitles and text from <image>. Since the speakers differ according to the colors of the subtitles, separate them into a list within the subtitles. \
+{"subtitles": [{"type":"speaker", "lines":["speaker1_subtitle1", "speaker1_subtitle2"]}, {"type":"speaker", "lines":["speaker2_subtitle1", "speaker2_subtitle2"]}, {"type":"narration", "lines":["narration_subtitle"]}] } \
+type can be narration, speaker, background'
 
 if torch.cuda.is_available():
     model_id = "openbmb/MiniCPM-V-2_6-int4"
@@ -36,7 +37,6 @@ class SubtitleType(str, Enum):
     narration = "narration"
     speaker = "speaker"
     background = "background"
-    other = "other"
     
 class Subtitle(BaseModel):
     type: SubtitleType
@@ -124,13 +124,13 @@ def process_ocr(video_filename, x, y, width, height):
     srt_path = os.path.join(UPLOAD_DIR, f"{filename_without_ext}.srt")
 
     # few-shot 예제 로딩
-    few_shot_data = []
-    with open('./few_shot/answer.txt', 'r', encoding="utf-8") as file:
-        for i, line in enumerate(file):
-            shot_image = Image.open(f'./few_shot/shot{i}.jpg').convert('RGB')
-            answer = line.strip()
-            few_shot_data.append({'role': 'user', 'content': [shot_image, system_prompt]})
-            few_shot_data.append({'role': 'assistant', 'content': [answer]})
+    # few_shot_data = []
+    # with open('./few_shot/answer.txt', 'r', encoding="utf-8") as file:
+    #     for i, line in enumerate(file):
+    #         shot_image = Image.open(f'./few_shot/shot{i}.jpg').convert('RGB')
+    #         answer = line.strip()
+    #         few_shot_data.append({'role': 'user', 'content': [shot_image, system_prompt]})
+    #         few_shot_data.append({'role': 'assistant', 'content': [answer]})
 
     cap = cv2.VideoCapture(video_path)
     if not cap.isOpened():
@@ -150,15 +150,15 @@ def process_ocr(video_filename, x, y, width, height):
             writer.writeheader()
 
         for frames in frame_batch_generator(cap, last_frame_number, x, y, width, height):
-            msgs = []
+            ocr_texts = []
             for frame in frames:
-                msg = few_shot_data[:]
-                msg.append({'role': 'user', 'content': [frame[1], system_prompt]})
-                msgs.append(msg)
-
-            # OCR 수행
-            ocr_texts: Subtitles = generator(msgs)
-            ocr_texts = ocr_texts.subtitles
+                # OCR 수행
+                ocr_text: Subtitles = generator(
+                    system_prompt,
+                    [frame[1]]
+                )
+                ocr_text = ocr_text.subtitles
+                ocr_texts.append(ocr_text)
 
             for i, ocr_text in enumerate(ocr_texts):
                 # 후처리
