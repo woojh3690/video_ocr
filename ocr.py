@@ -6,7 +6,7 @@ from typing import List, Generator
 
 import cv2
 import ollama
-from pydantic import BaseModel
+from pydantic import BaseModel, ValidationError
 
 from merging_module import merge_ocr_texts  # 모듈 임포트
 
@@ -134,11 +134,11 @@ async def process_ocr(video_filename, x, y, width, height):
             )
             content = response.message.content
             try:
-                ocr_subtitles_group = json.loads(content)["ocr_subtitles_group"]
-            except json.decoder.JSONDecodeError as e:
-                print("JSON 디코딩 에러. 파싱 에러 원본:")
+                ocr_subtitles_group = OcrSubtitleGroup.model_validate_json(content).ocr_subtitles_group
+            except ValidationError:
+                print(f"{frame_number} 프레임 JSON 디코딩 에러:")
                 print(content)
-                raise e
+                continue
             
             # 후처리
             ## 줄 병합
@@ -146,7 +146,9 @@ async def process_ocr(video_filename, x, y, width, height):
             for subtitles in ocr_subtitles_group:
                 merged_subtitle.append("\n".join(subtitles))
             ocr_text = "\n\n".join(merged_subtitle).strip()
-            print(ocr_text)
+
+            if ocr_text:
+                print(ocr_text)
 
             ## OCR 결과가 없는 경우 처리
             if any(phrase in ocr_text for phrase in [
