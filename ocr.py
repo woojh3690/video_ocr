@@ -120,7 +120,10 @@ async def process_ocr(video_filename, x, y, width, height):
             response = await client.chat(
                 model='minicpm-v',
                 format=OcrSubtitleGroup.model_json_schema(),
-                options={'temperature': 0},
+                options={
+                    'temperature': 0,
+                    'num_predict': 512
+                },
                 messages=[
                     {
                         'role': 'system',
