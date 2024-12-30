@@ -120,6 +120,7 @@ async def process_ocr(video_filename, x, y, width, height):
             response = await client.chat(
                 model='minicpm-v',
                 format=OcrSubtitleGroup.model_json_schema(),
+                options={'temperature': 0},
                 messages=[
                     {
                         'role': 'system',
@@ -132,7 +133,12 @@ async def process_ocr(video_filename, x, y, width, height):
                 ],
             )
             content = response.message.content
-            ocr_subtitles_group = json.loads(content)["ocr_subtitles_group"]
+            try:
+                ocr_subtitles_group = json.loads(content)["ocr_subtitles_group"]
+            except json.decoder.JSONDecodeError as e:
+                print("JSON 디코딩 에러. 파싱 에러 원본:")
+                print(content)
+                raise e
             
             # 후처리
             ## 줄 병합
