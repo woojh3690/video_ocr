@@ -1,7 +1,6 @@
 import os
 import re
 import shutil
-import threading
 
 from fastapi import FastAPI, UploadFile, File, Form, HTTPException, Request
 from fastapi.responses import HTMLResponse, StreamingResponse, FileResponse
@@ -9,7 +8,7 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 import aiofiles
 
-from ocr import process_ocr, progress  # 비디오 프로세싱 모듈에서 함수와 진행 상황 딕셔너리 가져오기
+from ocr import process_ocr
 
 app = FastAPI()
 
@@ -92,14 +91,8 @@ async def get_video(request: Request, video_filename: str):
 async def start_ocr(video_filename: str = Form(...), 
                     x: int = Form(...), y: int = Form(...), 
                     width: int = Form(...), height: int = Form(...)):
-    # OCR 처리를 별도의 스레드에서 실행
-    thread = threading.Thread(target=process_ocr, args=(video_filename, x, y, width, height))
-    thread.start()
-    return {"status": "OCR processing started"}
-
-@app.get("/progress/")
-async def get_progress():
-    return {"progress": progress.get("value", 0)}
+    generator = process_ocr(video_filename, x, y, width, height)
+    return StreamingResponse(generator, media_type="text/event-stream")
 
 @app.get("/download_srt/{video_filename}")
 async def download_srt(video_filename: str):
