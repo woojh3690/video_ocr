@@ -1,6 +1,8 @@
+uvicorn
+fastapi
+Jinja2
+python-multipart
+aiofiles
+opencv-python
 ollama
 thefuzz
-opencv-python
-fastapi
-uvicorn
-python-multipart
