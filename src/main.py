@@ -8,7 +8,7 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 import aiofiles
 
-from ocr import process_ocr
+from core.ocr import process_ocr
 
 app = FastAPI()
 

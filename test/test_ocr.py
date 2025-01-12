@@ -20,10 +20,6 @@ def make_few_shot_template(folder_path):
     ]
 
     example_file = os.path.join(folder_path, "answer.txt")
-
-    if not os.path.exists(example_file):
-        return messages
-    
     with open(example_file, "r", encoding="utf-8") as f:
         lines = f.readlines()
         for i, line in enumerate(lines):
@@ -81,6 +77,6 @@ async def process_images(host_url, test_image_path, few_shot_path):
 if __name__ == "__main__":
     import asyncio
     host_url = "http://localhost:11434"
-    test_image_path = "./test_ocr/test_image"
-    few_shot_path = "./few_shot"
+    test_image_path = "./test/test_image"
+    few_shot_path = "./src/few_shot"
     asyncio.run(process_images(host_url, test_image_path, few_shot_path))

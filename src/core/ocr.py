@@ -9,7 +9,7 @@ import cv2
 import ollama
 from pydantic import BaseModel, ValidationError
 
-from merging_module import merge_ocr_texts  # 모듈 임포트
+from core.merging_module import merge_ocr_texts  # 모듈 임포트
 
 system_prompt = 'OCR all the text from image following JSON: \n\
 {\"texts\":\"example\"}'
