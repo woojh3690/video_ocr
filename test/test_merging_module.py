@@ -26,7 +26,7 @@ def test_merge_ocr_texts_from_csv(csv_filename):
 
     # 자막 생성
     video_filename = os.path.splitext(os.path.basename(csv_filename))[0]
-    with open(f'./uploads/{video_filename}.srt', 'w', encoding='utf-8') as f:
+    with open(f'./test/{video_filename}_merge_test.srt', 'w', encoding='utf-8') as f:
         for idx, subtitle in enumerate(merged_subtitles, start=1):
             start = format_time(subtitle['start_time'])
             end = format_time(subtitle['end_time'])

@@ -178,7 +178,11 @@ async def process_ocr(video_filename, x, y, width, height):
             
             # 후처리
             ## 줄 병합
-            ocr_text = "\\n".join(ocr_subtitles_group) 
+            ocr_text = "\\n".join(text.strip() for text in ocr_subtitles_group)
+
+            # OCR 결과가 없는 경우 처리
+            if len(ocr_text) == 1:
+                ocr_text = ""
 
             ## OCR 결과가 없는 경우 처리
             if any(phrase in ocr_text for phrase in [
