@@ -4,6 +4,7 @@ test_image/
 few_shot/
 *.srt
 *.mp4
+*.mkv
 *.pkl
 *.csv
 *.gguf

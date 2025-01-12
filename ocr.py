@@ -10,15 +10,12 @@ from pydantic import BaseModel, ValidationError
 
 from merging_module import merge_ocr_texts  # 모듈 임포트
 
-system_prompt = 'You are a ocr assistant. Extract all the subtitles and text in JSON format. \
-Group the subtitles according to color of the subtitles; \
-subtitles with the same color belong to the same group.\n\
-Use the following JSON format: {\"ocr_subtitles_group\":[[\"group1 first subtitle\",\"group1 second subtitle\",\"...\"],\
-[\"group2 first subtitle\",\"group2 second subtitle\",\"...\"]]}\n\
+system_prompt = 'You are a ocr assistant. Extract all the japanese subtitles and text in JSON format. \
+Use the following JSON format: {\"ocr_subtitles_group\":[\"subtitle01\",\"subtitle02\"]}\n\
 If there is no subtitles then: {\"ocr_subtitles_group\":[]}'
 
 class OcrSubtitleGroup(BaseModel):
-    ocr_subtitles_group: list[list[str]]
+    ocr_subtitles_group: list[str]
 
 # 동영상 파일에서 프레임을 배치 단위로 생성하는 제너레이터.
 def frame_batch_generator(
@@ -117,24 +114,28 @@ async def process_ocr(video_filename, x, y, width, height):
             img_base64 = frame[1]
 
             # OCR 수행
-            response = await client.chat(
-                model='minicpm-v',
-                format=OcrSubtitleGroup.model_json_schema(),
-                options={
-                    'temperature': 0,
-                    'num_predict': 512
-                },
-                messages=[
-                    {
-                        'role': 'system',
-                        'content': system_prompt,
+            try:
+                response = await client.chat(
+                    model='minicpm-v',
+                    format=OcrSubtitleGroup.model_json_schema(),
+                    options={
+                        'temperature': 0,
+                        'num_predict': 512
                     },
-                    {
-                        'role': 'user',
-                        'images': [img_base64],
-                    }
-                ],
-            )
+                    messages=[
+                        {
+                            'role': 'system',
+                            'content': system_prompt,
+                        },
+                        {
+                            'role': 'user',
+                            'images': [img_base64],
+                        }
+                    ],
+                )
+            except Exception as e:
+                print(e)
+            
             content = response.message.content
             try:
                 ocr_subtitles_group = OcrSubtitleGroup.model_validate_json(content).ocr_subtitles_group
@@ -145,11 +146,7 @@ async def process_ocr(video_filename, x, y, width, height):
             
             # 후처리
             ## 줄 병합
-            merged_subtitle = []
-            for subtitles in ocr_subtitles_group:
-                merged_subtitle.append("\n".join(subtitles))
-            ocr_text = "\n\n".join(merged_subtitle).strip()
-
+            ocr_text = "\\n".join(ocr_subtitles_group) 
             if ocr_text:
                 print(ocr_text)
 
@@ -159,9 +156,6 @@ async def process_ocr(video_filename, x, y, width, height):
                 "There is no visible text in this image."
             ]):
                 ocr_text = ""
-            
-            ## 줄바꿈 문자 이스케이프 처리
-            ocr_text = ocr_text.replace('\n', '\\n')
 
             # CSV 파일에 쓰기
             entry = {
@@ -170,6 +164,17 @@ async def process_ocr(video_filename, x, y, width, height):
                 'text': ocr_text
             }
             writer.writerow(entry)
+
+            # llama.cpp - minicp-v 메모리 누수로 인한 일정 주기 모델 언로드
+            if frame_number % 1000 == 0:
+                print(f"모델 언로드 시작: {frame_number}")
+                response = ollama.chat(
+                    model='minicpm-v',
+                    keep_alive=0
+                )
+                content = response.message.content
+                print(content)
+                print("모델 언로드 완료")
 
             # 진행 상황 업데이트
             percentage = round((frame_number / total_frames) * 100, 2)
