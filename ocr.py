@@ -1,5 +1,6 @@
 import os
 import csv
+import copy
 import json
 import base64
 from typing import List, Generator
@@ -10,12 +11,41 @@ from pydantic import BaseModel, ValidationError
 
 from merging_module import merge_ocr_texts  # 모듈 임포트
 
-system_prompt = 'You are a ocr assistant. Extract all the japanese subtitles and text in JSON format. \
-Use the following JSON format: {\"ocr_subtitles_group\":[\"subtitle01\",\"subtitle02\"]}\n\
-If there is no subtitles then: {\"ocr_subtitles_group\":[]}'
+system_prompt = 'OCR all the text from image following JSON: \n\
+{\"texts\":\"example\"}'
 
 class OcrSubtitleGroup(BaseModel):
-    ocr_subtitles_group: list[str]
+    texts: list[str]
+
+def make_few_shot_template(folder_path):
+    messages = [
+        {
+            "role": "system",
+            "content": system_prompt,
+        }
+    ]
+
+    example_file = os.path.join(folder_path, "answer.txt")
+
+    if not os.path.exists(example_file):
+        return messages
+    
+    with open(example_file, "r", encoding="utf-8") as f:
+        lines = f.readlines()
+        for i, line in enumerate(lines):
+            line = line.strip()
+            if not line: continue
+
+            example_image = os.path.join(folder_path, f"shot{i}.jpg")
+            messages.append({
+                "role": "user",
+                "images": [example_image]
+            })
+            messages.append({
+                "role": "assistant",
+                "content": line
+            })
+    return messages
 
 # 동영상 파일에서 프레임을 배치 단위로 생성하는 제너레이터.
 def frame_batch_generator(
@@ -89,6 +119,9 @@ async def process_ocr(video_filename, x, y, width, height):
     csv_path = os.path.join(UPLOAD_DIR, f"{filename_without_ext}.csv")
     srt_path = os.path.join(UPLOAD_DIR, f"{filename_without_ext}.srt")
 
+    # few-shot 템플릿 생성
+    messages_template = make_few_shot_template("./few_shot")
+
     # 영상 정보 추출
     cap = cv2.VideoCapture(video_path)
     if not cap.isOpened():
@@ -113,6 +146,14 @@ async def process_ocr(video_filename, x, y, width, height):
             frame_number = frame[0]
             img_base64 = frame[1]
 
+            messages = copy.deepcopy(messages_template)
+            messages.append(
+                {
+                    "role": "user",
+                    "images": [img_base64]
+                }
+            )
+
             # OCR 수행
             try:
                 response = await client.chat(
@@ -122,23 +163,14 @@ async def process_ocr(video_filename, x, y, width, height):
                         'temperature': 0,
                         'num_predict': 512
                     },
-                    messages=[
-                        {
-                            'role': 'system',
-                            'content': system_prompt,
-                        },
-                        {
-                            'role': 'user',
-                            'images': [img_base64],
-                        }
-                    ],
+                    messages=messages
                 )
             except Exception as e:
                 print(e)
             
             content = response.message.content
             try:
-                ocr_subtitles_group = OcrSubtitleGroup.model_validate_json(content).ocr_subtitles_group
+                ocr_subtitles_group = OcrSubtitleGroup.model_validate_json(content).texts
             except ValidationError:
                 print(f"{frame_number} 프레임 JSON 디코딩 에러:")
                 print(content)
@@ -147,8 +179,6 @@ async def process_ocr(video_filename, x, y, width, height):
             # 후처리
             ## 줄 병합
             ocr_text = "\\n".join(ocr_subtitles_group) 
-            if ocr_text:
-                print(ocr_text)
 
             ## OCR 결과가 없는 경우 처리
             if any(phrase in ocr_text for phrase in [
@@ -157,6 +187,9 @@ async def process_ocr(video_filename, x, y, width, height):
             ]):
                 ocr_text = ""
 
+            if ocr_text:
+                print(ocr_text)
+                
             # CSV 파일에 쓰기
             entry = {
                 'frame_number': frame_number, 
