@@ -8,6 +8,8 @@ WORKDIR /app
 ARG DEBIAN_FRONTEND=noninteractive
 ENV TZ=Asia/Seoul
 
+RUN apt-get update && apt-get install ffmpeg libsm6 libxext6  -y
+
 # 의존성 파일 복사 및 설치
 COPY requirements.txt ./ 
 RUN pip install --no-cache-dir -r requirements.txt
