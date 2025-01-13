@@ -1,4 +1,5 @@
 import os
+import sys
 import re
 import shutil
 
@@ -9,6 +10,7 @@ from fastapi.templating import Jinja2Templates
 import aiofiles
 
 from core.ocr import process_ocr
+
 
 app = FastAPI()
 

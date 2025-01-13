@@ -11,6 +11,8 @@ from pydantic import BaseModel, ValidationError
 
 from core.merging_module import merge_ocr_texts  # 모듈 임포트
 
+ollama_ip = os.environ['OLLAMA_IP']
+
 system_prompt = 'OCR all the text from image following JSON: \n\
 {\"texts\":\"example\"}'
 
@@ -131,7 +133,7 @@ async def process_ocr(video_filename, x, y, width, height):
     frame_rate = cap.get(cv2.CAP_PROP_FPS)
 
     # ollama 클라이언트 초기화
-    client = ollama.AsyncClient()
+    client = ollama.AsyncClient(host=ollama_ip)
 
     # CSV 파일을 열어둔 채로 진행
     last_frame_number = get_last_processed_frame_number(csv_path)
