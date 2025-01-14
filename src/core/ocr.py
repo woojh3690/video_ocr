@@ -183,7 +183,7 @@ async def process_ocr(video_filename, x, y, width, height):
             ocr_text = "\\n".join(text.strip() for text in ocr_subtitles_group)
 
             # OCR 결과가 없는 경우 처리
-            if len(ocr_text) == 1:
+            if len(ocr_text) == 1 or ocr_text == "example":
                 ocr_text = ""
 
             ## OCR 결과가 없는 경우 처리
