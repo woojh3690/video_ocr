@@ -14,7 +14,7 @@ from core.merging_module import merge_ocr_texts  # 모듈 임포트
 ollama_ip = os.environ['OLLAMA_IP']
 
 system_prompt = 'OCR all the text from image following JSON: \n\
-{\"texts\":\"example\"}'
+{\"texts\":[\"example\"]}'
 
 class OcrSubtitleGroup(BaseModel):
     texts: list[str]

@@ -1,12 +1,11 @@
 import os
 import copy
-import json
 
 from pydantic import BaseModel, ValidationError
 import ollama
 
 system_prompt = 'OCR all the text from image following JSON: \n\
-{\"texts\":\"example\"}'
+{\"texts\":[\"example\"]}'
 
 class OcrSubtitleGroup(BaseModel):
     texts: list[str]
