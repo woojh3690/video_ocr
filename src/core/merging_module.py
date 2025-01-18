@@ -1,6 +1,14 @@
-# text_merging_module.py
-from thefuzz import fuzz
 import re
+from dataclasses import dataclass
+
+from thefuzz import fuzz
+
+@dataclass
+class Subtitle:
+    start_time: float
+    end_time: float
+    text: str
+    history: list[str]
 
 def is_valid_text(text):
     # 텍스트가 None이거나 빈 문자열인 경우
@@ -23,17 +31,17 @@ def is_valid_text(text):
 
     return True
 
-def get_init_subtitle(current_time, ocr_text):
-    return {
-        'start_time': current_time,
-        'end_time': current_time,
-        'text': ocr_text,
-        'history': [ocr_text]
-    }
+def get_init_subtitle(current_time, ocr_text) -> Subtitle:
+    return Subtitle(
+        start_time=current_time,
+        end_time=current_time,
+        text=ocr_text,
+        history= [ocr_text]
+    )
 
-def merge_ocr_texts(ocr_text_data, similarity_threshold=70):
-    ocr_progress_data = []
-    current_subtitle = None
+def merge_ocr_texts(ocr_text_data, similarity_threshold=70) -> list[Subtitle]:
+    ocr_progress_data: list[Subtitle] = []
+    current_subtitle: Subtitle = None
 
     none_subtitle_interval = 0  # 이전 자막 공백 카운트
     for entry in ocr_text_data:
@@ -49,11 +57,11 @@ def merge_ocr_texts(ocr_text_data, similarity_threshold=70):
             current_subtitle = get_init_subtitle(current_time, ocr_text)
         else:
             # 자막 유사성 및 자막 공백 카운트를 고려하여 자막 병합
-            similarity = fuzz.ratio(current_subtitle['text'], ocr_text)
+            similarity = fuzz.ratio(current_subtitle.text, ocr_text)
             if similarity > similarity_threshold and none_subtitle_interval < 8:
-                current_subtitle['end_time'] = current_time
-                current_subtitle['text'] = ocr_text
-                current_subtitle['history'].append(ocr_text)
+                current_subtitle.end_time = current_time
+                current_subtitle.text = ocr_text
+                current_subtitle.history.append(ocr_text)
             else:
                 ocr_progress_data.append(current_subtitle)
                 current_subtitle = get_init_subtitle(current_time, ocr_text)
@@ -62,23 +70,30 @@ def merge_ocr_texts(ocr_text_data, similarity_threshold=70):
     if current_subtitle:
         ocr_progress_data.append(current_subtitle)
 
-    result = []
+    grouped: list[Subtitle] = []
 
     # 그룹화된 자막을 기반으로 후처리
     for subtitle in ocr_progress_data:
         # history 가 너무 적은 경우 잘못 ocr 된 것으로 판단하여 제거
-        if len(subtitle['history']) < 4:
+        if len(subtitle.history) < 4:
             continue
 
         # 자막 텍스트 히스토리를 기반으로 가장 많이 등장한 텍스트를 선택
         # 가장 많이 등장한 텍스트가 여러 개인 경우 가장 먼저 나온 텍스트를 선택
-        subtitle['text'] = max(
-            enumerate(subtitle['history']),
-            key=lambda x: (subtitle['history'].count(x[1]), x[0])  # count와 인덱스를 기준으로 정렬
+        subtitle.text = max(
+            enumerate(subtitle.history),
+            key=lambda x: (subtitle.history.count(x[1]), x[0])  # count와 인덱스를 기준으로 정렬
         )[1]  # 최종적으로 값만 가져옴
 
-        del subtitle['history']
-        result.append(subtitle)
+        del subtitle.history
+        grouped.append(subtitle)
+
+    # 이전 자막과 완전히 동일하면 자막 병합
+    result: list[Subtitle] = [grouped[0]]
+    for subtitle in grouped[1:]:
+        if result[-1].text == subtitle.text:
+            result[-1].end_time = subtitle.end_time
+        else:
+            result.append(subtitle)
 
     return result
-

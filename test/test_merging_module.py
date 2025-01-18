@@ -28,9 +28,9 @@ def test_merge_ocr_texts_from_csv(csv_filename):
     video_filename = os.path.splitext(os.path.basename(csv_filename))[0]
     with open(f'./test/{video_filename}_merge_test.srt', 'w', encoding='utf-8') as f:
         for idx, subtitle in enumerate(merged_subtitles, start=1):
-            start = format_time(subtitle['start_time'])
-            end = format_time(subtitle['end_time'])
-            subtitle_line = subtitle['text'].replace("\\n", "\n")
+            start = format_time(subtitle.start_time)
+            end = format_time(subtitle.end_time)
+            subtitle_line = subtitle.text.replace("\\n", "\n")
             f.write(f"{idx}\n")
             f.write(f"{start} --> {end}\n")
             f.write(f"{subtitle_line}\n\n")
