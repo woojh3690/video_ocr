@@ -31,6 +31,12 @@
         </div>
         <div class="row mt-4">
             <div class="col-md-6">
+                <label for="intervalInput">OCR 간격(초):</label>
+                <input type="number" id="intervalInput" step="0.1" min="0.1" value="0.3">
+            </div>
+        </div>
+        <div class="row mt-4">
+            <div class="col-md-6">
                 <button id="start-ocr-btn" class="btn btn-success">OCR 시작</button>
             </div>
             <div class="col-md-6" id="progress-container" style="display:none;">

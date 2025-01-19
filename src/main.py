@@ -92,8 +92,8 @@ async def get_video(request: Request, video_filename: str):
 @app.post("/start_ocr/")
 async def start_ocr(video_filename: str = Form(...), 
                     x: int = Form(...), y: int = Form(...), 
-                    width: int = Form(...), height: int = Form(...)):
-    generator = process_ocr(video_filename, x, y, width, height)
+                    width: int = Form(...), height: int = Form(...), interval_value: float = Form(...)):
+    generator = process_ocr(video_filename, x, y, width, height, interval_value)
     return StreamingResponse(generator, media_type="text/event-stream")
 
 @app.get("/download_srt/{video_filename}")

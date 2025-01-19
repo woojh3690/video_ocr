@@ -53,11 +53,11 @@ def make_few_shot_template(folder_path):
 def frame_batch_generator(
     cap: cv2.VideoCapture, 
     last_frame_number: int, 
-    x, y, width, height
+    x, y, width, height, interval = 0.3
 ) -> Generator[List, None, None]:
     last_frame_number = -1 if last_frame_number is None else last_frame_number
 
-    interval = 0.3  # 0.3초마다 OCR 수행
+    # interval 초마다 OCR 수행
     frame_rate = cap.get(cv2.CAP_PROP_FPS)
     frame_interval = max(1, int(round(frame_rate * interval)))  # 최소 1프레임
 
@@ -113,7 +113,7 @@ def format_time(seconds):
     millis = int((seconds - int(seconds)) * 1000)
     return f"{hours:02}:{minutes:02}:{secs:02},{millis:03}"
     
-async def process_ocr(video_filename, x, y, width, height):
+async def process_ocr(video_filename, x, y, width, height, interval=0.3):
     # 파일 경로 정보 초기화
     UPLOAD_DIR = "uploads"
     video_path = os.path.join(UPLOAD_DIR, video_filename)
@@ -144,7 +144,7 @@ async def process_ocr(video_filename, x, y, width, height):
             writer.writeheader()
             csvfile.flush()
 
-        for frame in frame_batch_generator(cap, last_frame_number, x, y, width, height):
+        for frame in frame_batch_generator(cap, last_frame_number, x, y, width, height, interval):
             frame_number = frame[0]
             img_base64 = frame[1]
 

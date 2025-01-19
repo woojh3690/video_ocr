@@ -9,6 +9,7 @@ let boundingBox = document.getElementById('bounding-box');
 let handles = document.querySelectorAll('.handle');
 
 let videoFile;
+let intervalValue = 0.3;
 let dragging = false;
 let dragDirection = '';
 let startY = 0;
@@ -125,6 +126,12 @@ document.addEventListener('mouseup', function(e) {
     dragDirection = '';
 });
 
+// interval 설정
+document.getElementById("intervalInput").addEventListener("input", (event) => {
+    const inputValue = parseFloat(event.target.value);
+    intervalValue = inputValue;
+});
+
 // OCR 시작
 startOcrBtn.addEventListener('click', async function() {
     // 진행 바 및 예상 완료 시간 초기화
@@ -159,6 +166,7 @@ startOcrBtn.addEventListener('click', async function() {
     formData.append('y', y);
     formData.append('width', width);
     formData.append('height', height);
+    formData.append('interval_value', intervalValue);
 
     try {
         // 작업 시작 시간 기록

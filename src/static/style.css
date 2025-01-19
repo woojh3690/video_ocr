@@ -59,3 +59,10 @@
 .handle.right {
     right: -5px;
 }
+
+/* 고급 설정 */
+input[type="number"] {
+    margin: 3px;
+    font-size: 16px;
+    width: 50px;
+}
