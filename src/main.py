@@ -100,7 +100,7 @@ async def start_ocr(video_filename: str = Form(...),
 async def download_srt(video_filename: str):
     video_filename = os.path.splitext(os.path.basename(video_filename))[0]
     subtitle_name = f"{video_filename}.srt"
-    srt_file = f"./uploads/{subtitle_name}"
+    srt_file = os.path.join(UPLOAD_DIR, subtitle_name)
     if os.path.exists(srt_file):
         return FileResponse(srt_file, media_type='application/octet-stream', filename=subtitle_name)
     else:
