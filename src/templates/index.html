@@ -9,51 +9,79 @@
 <body>
     <div class="container mt-5">
         <h1 class="text-center">비디오 OCR</h1>
-        <div class="row mt-4">
-            <div class="col-md-6">
-                <input type="file" id="video-upload" accept="video/*" class="form-control-file">
-            </div>
+        
+        <!-- 작업 목록(큐) 뷰 -->
+        <div id="task-list-view">
+            <h2>작업 큐</h2>
+            <table class="table" id="task-list">
+                <thead>
+                    <tr>
+                        <th>Task ID</th>
+                        <th>비디오 파일</th>
+                        <th>진행 상황</th>
+                        <th>상태</th>
+                        <th>예상 완료 시간 (초)</th>
+                        <th>삭제</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <!-- 작업 row들이 동적으로 추가됩니다. -->
+                </tbody>
+            </table>
+            <button id="new-ocr-btn" class="btn btn-primary">새 OCR 작업 추가</button>
         </div>
-        <div class="row mt-4">
-            <div class="col-md-12 position-relative">
-                <div id="video-container" class="position-relative">
-                    <video id="video" controls class="w-100"></video>
-                    <!-- 바운딩 박스 -->
-                    <div id="bounding-box">
-                        <!-- 드래그 핸들 -->
-                        <div class="handle top"></div>
-                        <div class="handle right"></div>
-                        <div class="handle bottom"></div>
-                        <div class="handle left"></div>
+        
+        <!-- OCR 작업 생성 뷰 (초기엔 숨김) -->
+        <div id="ocr-creation-view" style="display:none;">
+            <!-- 뒤로가기 버튼 -->
+            <button id="back-to-list-btn" class="btn btn-secondary mb-3">작업 큐로 돌아가기</button>
+            
+            <div class="row mt-4">
+                <div class="col-md-6">
+                    <input type="file" id="video-upload" accept="video/*" class="form-control-file">
+                </div>
+            </div>
+            <div class="row mt-4">
+                <div class="col-md-12 position-relative">
+                    <div id="video-container" class="position-relative">
+                        <video id="video" controls class="w-100"></video>
+                        <!-- 바운딩 박스 -->
+                        <div id="bounding-box">
+                            <!-- 드래그 핸들 -->
+                            <div class="handle top"></div>
+                            <div class="handle right"></div>
+                            <div class="handle bottom"></div>
+                            <div class="handle left"></div>
+                        </div>
                     </div>
                 </div>
             </div>
-        </div>
-        <div class="row mt-4">
-            <div class="col-md-6">
-                <label for="intervalInput">OCR 간격(초):</label>
-                <input type="number" id="intervalInput" step="0.1" min="0.1" value="0.3">
+            <div class="row mt-4">
+                <div class="col-md-6">
+                    <label for="intervalInput">OCR 간격(초):</label>
+                    <input type="number" id="intervalInput" step="0.1" min="0.1" value="0.3">
+                </div>
+            </div>
+            <div class="row mt-4">
+                <div class="col-md-6">
+                    <button id="start-ocr-btn" class="btn btn-success">OCR 시작</button>
+                </div>
+                <div class="col-md-6" id="ocr-progress-container" style="display:none;">
+                    <label for="ocr-progress">진행 상황:</label>
+                    <progress id="ocr-progress" value="0" max="100"></progress>
+                    <!-- 예상 완료 시간을 표시하기 위한 요소 -->
+                    <div id="ocr-estimated-completion" style="margin-top: 10px;"></div>
+                </div>
+            </div>
+            <div class="row mt-4">
+                <div class="col-md-12">
+                    <button id="download-btn" class="btn btn-info" style="display:none;">SRT 다운로드</button>
+                </div>
             </div>
         </div>
-        <div class="row mt-4">
-            <div class="col-md-6">
-                <button id="start-ocr-btn" class="btn btn-success">OCR 시작</button>
-            </div>
-            <div class="col-md-6" id="progress-container" style="display:none;">
-                <label for="progress">진행 상황:</label>
-                <progress id="progress" value="0" max="100"></progress>
-                <!-- 예상 완료 시간을 표시하기 위한 요소 추가 -->
-                <div id="estimated-completion" style="margin-top: 10px;"></div>
-            </div>
-        </div>
-        <div class="row mt-4">
-            <div class="col-md-12">
-                <button id="download-btn" class="btn btn-info" style="display:none;">SRT 다운로드</button>
-            </div>
-        </div>
+        
     </div>
 
     <script src="/static/script.js"></script>
 </body>
 </html>
-    

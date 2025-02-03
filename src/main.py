@@ -1,9 +1,13 @@
 import os
-import sys
 import re
 import shutil
+import uuid
+import asyncio
+import json
+import time
+from typing import Dict, List
 
-from fastapi import FastAPI, UploadFile, File, Form, HTTPException, Request
+from fastapi import FastAPI, UploadFile, File, Form, HTTPException, Request, WebSocket, WebSocketDisconnect
 from fastapi.responses import HTMLResponse, StreamingResponse, FileResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
@@ -22,6 +26,16 @@ templates = Jinja2Templates(directory="templates")
 UPLOAD_DIR = "uploads"
 if not os.path.exists(UPLOAD_DIR):
     os.makedirs(UPLOAD_DIR)
+
+# 글로벌 작업 상태 저장소
+# 예: { task_id: { "video_filename": str, "status": "running"/"completed"/"failed",
+#                   "progress": 0~100, "messages": [progress update objects],
+#                   "result": srt 파일 경로, "error": str, "start_time": timestamp } }
+tasks: Dict[str, Dict] = {}
+
+# 클라이언트 WebSocket 연결 (클라이언트당 하나의 WebSocket)
+global_websocket_connections: List[WebSocket] = []
+
 
 @app.get("/", response_class=HTMLResponse)
 async def read_root(request: Request):
@@ -89,19 +103,160 @@ async def get_video(request: Request, video_filename: str):
         headers['Accept-Ranges'] = 'bytes'
         return FileResponse(video_path, headers=headers, media_type='video/mp4')
 
-@app.post("/start_ocr/")
-async def start_ocr(video_filename: str = Form(...), 
-                    x: int = Form(...), y: int = Form(...), 
-                    width: int = Form(...), height: int = Form(...), interval_value: float = Form(...)):
-    generator = process_ocr(video_filename, x, y, width, height, interval_value)
-    return StreamingResponse(generator, media_type="text/event-stream")
 
-@app.get("/download_srt/{video_filename}")
-async def download_srt(video_filename: str):
-    video_filename = os.path.splitext(os.path.basename(video_filename))[0]
-    subtitle_name = f"{video_filename}.srt"
-    srt_file = os.path.join(UPLOAD_DIR, subtitle_name)
-    if os.path.exists(srt_file):
-        return FileResponse(srt_file, media_type='application/octet-stream', filename=subtitle_name)
-    else:
-        return {"error": "SRT file not found"}
+# ---------------------------
+# 백그라운드 OCR 작업 관련 함수 및 엔드포인트
+# ---------------------------
+@app.post("/start_ocr/")
+async def start_ocr_endpoint(
+    video_filename: str = Form(...), 
+    x: int = Form(...), 
+    y: int = Form(...), 
+    width: int = Form(...), 
+    height: int = Form(...), 
+    interval_value: float = Form(...)
+):
+    task_id = str(uuid.uuid4())
+    tasks[task_id] = {
+        "video_filename": video_filename,
+        "status": "running",
+        "progress": 0,
+        "messages": [],
+        "start_time": time.time()
+    }
+    
+    # 백그라운드에서 OCR 작업 실행
+    asyncio.create_task(run_ocr_task(task_id, video_filename, x, y, width, height, interval_value))
+    return {"task_id": task_id}
+
+
+async def run_ocr_task(task_id, video_filename, x, y, width, height, interval):
+    try:
+        async for progress_message in process_ocr(video_filename, x, y, width, height, interval):
+            # progress_message는 "data: {...}\n\n" 형식의 문자열
+            if progress_message.startswith("data:"):
+                try:
+                    json_str = progress_message[5:].strip()
+                    data = json.loads(json_str)
+                    tasks[task_id]["progress"] = data.get("progress", tasks[task_id]["progress"])
+                    tasks[task_id]["messages"].append(data)
+                    # 예상 완료 시간 계산
+                    estimated_time = calculate_estimated_completion(tasks[task_id])
+                    data["estimated_completion"] = estimated_time
+                    data["task_id"] = task_id
+                    # 전역 WebSocket 연결된 모든 클라이언트에게 업데이트 전송
+                    await broadcast_update(data)
+                except Exception as e:
+                    print("Progress message 처리 중 에러:", e)
+        # OCR 작업 완료 후
+        tasks[task_id]["status"] = "completed"
+        filename_without_ext = os.path.splitext(os.path.basename(video_filename))[0]
+        srt_path = os.path.join(UPLOAD_DIR, f"{filename_without_ext}.srt")
+        tasks[task_id]["result"] = srt_path if os.path.exists(srt_path) else None
+        
+        complete_data = {"progress": 100, "status": "completed", "estimated_completion": 0, "task_id": task_id}
+        await broadcast_update(complete_data)
+    except Exception as e:
+        tasks[task_id]["status"] = "failed"
+        tasks[task_id]["error"] = str(e)
+        print("OCR 작업 중 에러:", e)
+        error_data = {"progress": tasks[task_id]["progress"], "status": "failed", "error": str(e), "task_id": task_id}
+        await broadcast_update(error_data)
+
+
+async def broadcast_update(message: dict):
+    """
+    모든 연결된 클라이언트 WebSocket에 message(JSON)를 전송합니다.
+    전송에 실패한 경우 해당 WebSocket은 리스트에서 제거합니다.
+    """
+    to_remove = []
+    for ws in global_websocket_connections:
+        try:
+            await ws.send_json(message)
+        except Exception as e:
+            print("WebSocket 전송 에러:", e)
+            to_remove.append(ws)
+    for ws in to_remove:
+        if ws in global_websocket_connections:
+            global_websocket_connections.remove(ws)
+
+
+# ---------------------------
+# 작업 상태 조회 엔드포인트
+# ---------------------------
+@app.get("/tasks/")
+async def get_tasks():
+    return tasks
+
+
+@app.get("/tasks/{task_id}")
+async def get_task(task_id: str):
+    if task_id not in tasks:
+        raise HTTPException(status_code=404, detail="Task not found")
+    return tasks[task_id]
+
+
+# ---------------------------
+# 작업 삭제 관련 함수 및 엔드포인트
+# ---------------------------
+def delete_task(task_id: str):
+    """
+    작업 삭제 기능 구현:
+    - tasks 딕셔너리에서 해당 작업 삭제
+    - 관련 파일(CSV, SRT)이 존재하면 삭제
+    """
+    if task_id in tasks:
+        video_filename = tasks[task_id].get("video_filename")
+        if video_filename:
+            filename_without_ext = os.path.splitext(os.path.basename(video_filename))[0]
+            csv_path = os.path.join(UPLOAD_DIR, f"{filename_without_ext}.csv")
+            srt_path = os.path.join(UPLOAD_DIR, f"{filename_without_ext}.srt")
+            # 파일이 존재하면 삭제
+            if os.path.exists(csv_path):
+                os.remove(csv_path)
+            if os.path.exists(srt_path):
+                os.remove(srt_path)
+        del tasks[task_id]
+
+
+@app.delete("/tasks/{task_id}")
+async def delete_task_endpoint(task_id: str):
+    delete_task(task_id)
+    return {"detail": f"Task {task_id} 삭제 요청이 처리되었습니다."}
+
+
+# ---------------------------
+# 예상 완료 시간 계산 함수 구현
+# ---------------------------
+def calculate_estimated_completion(task: Dict) -> int:
+    """
+    작업 정보를 바탕으로 예상 완료 시간을 계산하여 초 단위로 반환합니다.
+    진행률(progress)이 0보다 크면,
+      - 경과 시간 = 현재 시각 - 작업 시작 시각
+      - 남은 시간 = (경과 시간) * (100 - progress) / progress
+    진행률이 0이면 -1을 반환합니다.
+    """
+    progress = task.get("progress", 0)
+    start_time = task.get("start_time")
+    if not start_time or progress <= 0:
+        return -1
+    elapsed = time.time() - start_time
+    remaining = elapsed * (100 - progress) / progress
+    return int(remaining)
+
+
+# ---------------------------
+# WebSocket 엔드포인트: 클라이언트당 하나의 WebSocket 연결
+# ---------------------------
+@app.websocket("/ws/tasks")
+async def websocket_endpoint(websocket: WebSocket):
+    await websocket.accept()
+    global_websocket_connections.append(websocket)
+    try:
+        while True:
+            # 클라이언트로부터 받은 메시지를 처리하거나,
+            # 단순히 연결 유지용으로 대기
+            await websocket.receive_text()
+    except WebSocketDisconnect:
+        if websocket in global_websocket_connections:
+            global_websocket_connections.remove(websocket)
