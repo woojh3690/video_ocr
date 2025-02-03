@@ -89,11 +89,14 @@ def merge_ocr_texts(ocr_text_data, similarity_threshold=70) -> list[Subtitle]:
         grouped.append(subtitle)
 
     # 이전 자막과 완전히 동일하면 자막 병합
-    result: list[Subtitle] = [grouped[0]]
-    for subtitle in grouped[1:]:
-        if result[-1].text == subtitle.text:
-            result[-1].end_time = subtitle.end_time
-        else:
-            result.append(subtitle)
+    if len(grouped) > 0:
+        result: list[Subtitle] = [grouped[0]]
+        for subtitle in grouped[1:]:
+            if result[-1].text == subtitle.text:
+                result[-1].end_time = subtitle.end_time
+            else:
+                result.append(subtitle)
+    else:
+        result = []
 
     return result
