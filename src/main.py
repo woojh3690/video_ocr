@@ -1,10 +1,14 @@
 import os
+import sys
 import re
 import shutil
 import uuid
 import asyncio
 import json
 import time
+import pickle
+import atexit
+import signal
 from typing import Dict, List
 
 from fastapi import FastAPI, UploadFile, File, Form, HTTPException, Request, WebSocket, WebSocketDisconnect
@@ -18,10 +22,6 @@ from core.ocr import process_ocr
 
 app = FastAPI()
 
-# 정적 파일 및 템플릿 설정
-app.mount("/static", StaticFiles(directory="static"), name="static")
-templates = Jinja2Templates(directory="templates")
-
 # 업로드된 비디오 파일 저장 경로
 UPLOAD_DIR = "uploads"
 if not os.path.exists(UPLOAD_DIR):
@@ -31,11 +31,50 @@ if not os.path.exists(UPLOAD_DIR):
 # 예: { task_id: { "video_filename": str, "status": "running"/"completed"/"failed",
 #                   "progress": 0~100, "messages": [progress update objects],
 #                   "result": srt 파일 경로, "error": str, "start_time": timestamp } }
+PICKLE_FILENAME = 'tasks.pkl'
 tasks: Dict[str, Dict] = {}
 
 # 클라이언트 WebSocket 연결 (클라이언트당 하나의 WebSocket)
 global_websocket_connections: List[WebSocket] = []
 
+def load_tasks():
+    global tasks
+    if os.path.exists(PICKLE_FILENAME):
+        try:
+            with open(PICKLE_FILENAME, 'rb') as f:
+                tasks = pickle.load(f)
+            print(f"{PICKLE_FILENAME}에서 tasks 로드 성공")
+        except Exception as e:
+            print("tasks 로드 중 오류 발생:", e)
+            tasks = {}
+    else:
+        tasks = {}
+
+def save_tasks():
+    try:
+        with open(PICKLE_FILENAME, 'wb') as f:
+            pickle.dump(tasks, f)
+        print(f"tasks를 {PICKLE_FILENAME}에 저장했습니다.")
+    except Exception as e:
+        print("tasks 저장 중 오류 발생:", e)
+
+# atexit를 사용해 프로그램 종료 시 자동 저장
+atexit.register(save_tasks)
+
+def handle_termination(signum, frame):
+    print(f"종료 시그널({signum}) 수신 - tasks 저장 중...")
+    save_tasks()
+    sys.exit(0)
+
+signal.signal(signal.SIGTERM, handle_termination)
+signal.signal(signal.SIGINT, handle_termination)
+
+# 프로그램 시작 시 tasks 로드
+load_tasks()
+
+# 정적 파일 및 템플릿 설정
+app.mount("/static", StaticFiles(directory="static"), name="static")
+templates = Jinja2Templates(directory="templates")
 
 @app.get("/", response_class=HTMLResponse)
 async def read_root(request: Request):
