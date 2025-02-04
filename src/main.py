@@ -163,7 +163,8 @@ async def start_ocr_endpoint(
         "progress": 0,
         "estimated_completion": "TDB",
         "messages": [],
-        "start_time": time.time()
+        "start_time": time.time(),
+        "cancelled": False  # 취소 플래그 추가
     }
     
     # 백그라운드에서 OCR 작업 실행
@@ -175,14 +176,19 @@ async def run_ocr_task(task_id, video_filename, x, y, width, height, interval):
     task = tasks[task_id]
     try:
         async for progress in process_ocr(video_filename, x, y, width, height, interval):
+            # 취소 요청이 들어왔는지 확인
+            if task.get("cancelled"):
+                task["status"] = "cancelled"
+                await broadcast_update(task)
+                return  # 작업 중지
+
             try:
                 task["progress"] = progress
-                task["estimated_completion"] = calculate_estimated_completion(tasks[task_id])
-                # 전역 WebSocket 연결된 모든 클라이언트에게 업데이트 전송
+                task["estimated_completion"] = calculate_estimated_completion(task)
                 await broadcast_update(task)
             except Exception as e:
                 print("Progress message 처리 중 에러:", e)
-        # OCR 작업 완료 후
+        # OCR 작업 정상 완료 시
         task["status"] = "completed"
         filename_without_ext = os.path.splitext(os.path.basename(video_filename))[0]
         srt_path = os.path.join(UPLOAD_DIR, f"{filename_without_ext}.srt")
@@ -194,6 +200,17 @@ async def run_ocr_task(task_id, video_filename, x, y, width, height, interval):
         print("OCR 작업 중 에러:", e)
         await broadcast_update(task)
 
+
+@app.post("/cancel_ocr/")
+async def cancel_ocr(task_id: str = Form(...)):
+    if task_id in tasks:
+        tasks[task_id]["cancelled"] = True
+        tasks[task_id]["status"] = "cancelling"
+        await broadcast_update(tasks[task_id])
+        return {"detail": f"Task {task_id} 취소 요청이 접수되었습니다."}
+    else:
+        raise HTTPException(status_code=404, detail="Task not found")
+    
 
 async def broadcast_update(message: dict):
     """

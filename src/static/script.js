@@ -75,10 +75,12 @@ function updateTaskRow(task) {
         <div class="progress-bar" role="progressbar" style="width: ${progress}%;" aria-valuenow="${progress}" aria-valuemin="0" aria-valuemax="100"></div>
     </div>`;
     
-    // Delete 버튼 (보여주려면 상태가 completed 또는 failed)
-    let deleteBtnHtml = "";
-    if (status === "completed" || status === "failed") {
-        deleteBtnHtml = `<button class="btn btn-danger btn-sm delete-btn" data-task-id="${taskId}">삭제</button>`;
+    // 중지 or 삭제 버튼
+    let btnHtml = "";
+    if (status === "running") {
+        btnHtml = `<button class="btn btn-warning btn-sm cancel-btn" data-task-id="${taskId}">중지</button>`;
+    } else {
+        btnHtml = `<button class="btn btn-danger btn-sm delete-btn" data-task-id="${taskId}">삭제</button>`;
     }
     
     let rowHtml = `
@@ -87,7 +89,7 @@ function updateTaskRow(task) {
         <td>${progressBarHtml}</td>
         <td>${status}</td>
         <td>${estimated}</td>
-        <td>${deleteBtnHtml}</td>
+        <td>${btnHtml}</td>
     `;
     
     if (existingRow) {
@@ -99,6 +101,14 @@ function updateTaskRow(task) {
         taskListTableBody.appendChild(tr);
     }
     
+    // 중지 버튼 이벤트 연결
+    document.querySelectorAll(".cancel-btn").forEach(btn => {
+        btn.onclick = function() {
+            let id = this.getAttribute("data-task-id");
+            cancelTask(id);
+        };
+    });
+
     // 삭제 버튼 이벤트 연결
     document.querySelectorAll(".delete-btn").forEach(btn => {
         btn.onclick = function() {
@@ -106,6 +116,21 @@ function updateTaskRow(task) {
             deleteTask(id);
         };
     });
+}
+
+// CANCEL 요청을 보내고 작업 중지
+function cancelTask(taskId) {
+    let formData = new FormData();
+    formData.append('task_id', taskId);
+    fetch(`/cancel_ocr`, {
+        method: 'POST',
+        body: formData
+    })
+    .then(response => response.json())
+    .then(data => {
+        console.log(data.detail);
+    })
+    .catch(err => console.error(err));
 }
 
 // DELETE 요청을 보내고 row 제거
