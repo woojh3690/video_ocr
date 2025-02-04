@@ -84,7 +84,6 @@ function updateTaskRow(task) {
     }
     
     let rowHtml = `
-        <td>${taskId}</td>
         <td>${videoFile}</td>
         <td>${progressBarHtml}</td>
         <td>${status}</td>
