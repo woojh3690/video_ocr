@@ -307,3 +307,13 @@ async def websocket_endpoint(websocket: WebSocket):
     except WebSocketDisconnect:
         if websocket in global_websocket_connections:
             global_websocket_connections.remove(websocket)
+
+@app.get("/download_srt/{video_filename}")
+async def download_srt(video_filename: str):
+    video_filename = os.path.splitext(os.path.basename(video_filename))[0]
+    subtitle_name = f"{video_filename}.srt"
+    srt_file = os.path.join(UPLOAD_DIR, subtitle_name)
+    if os.path.exists(srt_file):
+        return FileResponse(srt_file, media_type='application/octet-stream', filename=subtitle_name)
+    else:
+        return {"error": "SRT file not found"}

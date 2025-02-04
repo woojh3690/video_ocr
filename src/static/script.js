@@ -1,7 +1,6 @@
 let video = document.getElementById('video');
 let videoUpload = document.getElementById('video-upload');
 let startOcrBtn = document.getElementById('start-ocr-btn');
-let downloadBtn = document.getElementById('download-btn');
 let ocrProgressContainer = document.getElementById('ocr-progress-container');
 
 let boundingBox = document.getElementById('bounding-box');
@@ -114,17 +113,10 @@ function updateTaskRow(task) {
         
         row.querySelector('.status-cell').innerText = status;
         row.querySelector('.estimated-cell').innerText = estimated;
-        
-        // 작업 버튼 업데이트 (필요한 경우에만 클래스나 텍스트를 수정)
+
+        // 실행 상태가 아닐 경우 삭제 버튼으로 업데이트
         let btn = row.querySelector('.action-cell button');
-        if (status === 'running') {
-            btn.className = 'btn btn-warning btn-sm cancel-btn';
-            btn.innerText = '중지';
-            btn.setAttribute('data-task-id', taskId);
-            btn.onclick = function() {
-                cancelTask(taskId);
-            };
-        } else {
+        if (status !== 'running') {
             btn.className = 'btn btn-danger btn-sm delete-btn';
             btn.innerText = '삭제';
             btn.setAttribute('data-task-id', taskId);
@@ -132,6 +124,15 @@ function updateTaskRow(task) {
                 deleteTask(taskId);
             };
         }
+    }
+
+    // OCR 작업이 완료된 경우 자막 다운로드 링크 추가
+    if (status === 'completed') {
+        let statusCell = row.querySelector('.status-cell');
+        statusCell.innerHTML = `<span class="download-subtitles" style="cursor:pointer; color: blue; text-decoration: underline;">${status}</span>`;
+        statusCell.querySelector('.download-subtitles').onclick = function() {
+            window.location.href = `/download_srt/${videoFile}`;
+        };
     }
 }
 
@@ -299,9 +300,6 @@ document.getElementById("intervalInput").addEventListener("input", (event) => {
 
 // OCR 시작: 이제 POST /start_ocr/를 호출하면 task_id를 받고, WebSocket 업데이트로 진행률이 표시됨.
 startOcrBtn.addEventListener('click', async function() {
-    // 초기화
-    downloadBtn.style.display = 'none';
-    
     // 바운딩 박스의 위치와 크기 계산
     let videoRect = video.getBoundingClientRect();
     let boxRect = boundingBox.getBoundingClientRect();
@@ -335,10 +333,4 @@ startOcrBtn.addEventListener('click', async function() {
     } catch (err) {
         alert('OCR 작업 시작 중 오류 발생: ' + err.message);
     }
-});
-
-// SRT 다운로드 버튼 이벤트
-downloadBtn.addEventListener('click', function() {
-    // vfilename가 현재 작업의 비디오 파일명임.
-    window.location.href = `/download_srt/${vfilename}`;
 });
