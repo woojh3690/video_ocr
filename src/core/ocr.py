@@ -243,4 +243,4 @@ async def process_ocr(video_filename, x, y, width, height, interval=0.3):
             f.write(f"{subtitle_line}\n\n")
 
     # 진행 상황 100%로 업데이트
-    yield f"data: {json.dumps({'progress': 100})}\n\n"
+    yield 100
