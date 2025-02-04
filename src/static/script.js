@@ -64,64 +64,82 @@ fetch('/tasks/')
 // 작업 목록 테이블의 row 업데이트 (존재하면 수정, 없으면 생성)
 function updateTaskRow(task) {
     let taskId = task.task_id;
-    let existingRow = document.getElementById("task-row-" + taskId);
     let progress = task.progress || 0;
     let status = task.status || "";
     let estimated = (typeof task.estimated_completion !== "undefined") ? task.estimated_completion : "TDB";
     let videoFile = task.video_filename || "";
-    
-    // progress bar HTML
-    let progressBarHtml = `<div class="progress">
-        <div class="progress-bar" role="progressbar" style="width: ${progress}%;" aria-valuenow="${progress}" aria-valuemin="0" aria-valuemax="100"></div>
-    </div>`;
-    
-    // 중지 or 삭제 버튼
-    let btnHtml = "";
-    if (status === "running") {
-        btnHtml = `<button class="btn btn-warning btn-sm cancel-btn" data-task-id="${taskId}">중지</button>`;
-    } else {
-        btnHtml = `<button class="btn btn-danger btn-sm delete-btn" data-task-id="${taskId}">삭제</button>`;
-    }
-    
-    let rowHtml = `
-        <td>${videoFile}</td>
-        <td>${progressBarHtml}</td>
-        <td>${status}</td>
-        <td>${estimated}</td>
-        <td>${btnHtml}</td>
-    `;
-    
-    if (existingRow) {
-        existingRow.innerHTML = rowHtml;
-    } else {
-        let tr = document.createElement("tr");
-        tr.id = "task-row-" + taskId;
-        tr.innerHTML = rowHtml;
-        taskListTableBody.appendChild(tr);
-    }
-    
-    // 중지 버튼 이벤트 연결
-    document.querySelectorAll(".cancel-btn").forEach(btn => {
-        btn.onclick = function() {
-            let id = this.getAttribute("data-task-id");
-            cancelTask(id);
-        };
-    });
 
-    // 삭제 버튼 이벤트 연결
-    document.querySelectorAll(".delete-btn").forEach(btn => {
-        btn.onclick = function() {
-            let id = this.getAttribute("data-task-id");
-            deleteTask(id);
-        };
-    });
+    // 기존 row 검색
+    let row = document.getElementById("task-row-" + taskId);
+
+    if (!row) {
+        // row가 없으면 새로 생성
+        row = document.createElement("tr");
+        row.id = "task-row-" + taskId;
+        row.innerHTML = `
+            <td class="video-file">${videoFile}</td>
+            <td class="progress-cell">
+                <div class="progress">
+                    <div class="progress-bar" role="progressbar" style="width: ${progress}%;" aria-valuenow="${progress}" aria-valuemin="0" aria-valuemax="100"></div>
+                </div>
+            </td>
+            <td class="status-cell">${status}</td>
+            <td class="estimated-cell">${estimated}</td>
+            <td class="action-cell">
+                <button class="${status === 'running' ? 'btn btn-warning btn-sm cancel-btn' : 'btn btn-danger btn-sm delete-btn'}" data-task-id="${taskId}">
+                    ${status === 'running' ? '중지' : '삭제'}
+                </button>
+            </td>
+        `;
+        taskListTableBody.appendChild(row);
+
+        // 버튼 이벤트 등록
+        let btn = row.querySelector("button");
+        if (status === 'running') {
+            btn.onclick = function() {
+                cancelTask(taskId);
+            };
+        } else {
+            btn.onclick = function() {
+                deleteTask(taskId);
+            };
+        }
+    } else {
+        // 기존 row가 있으면 변경된 부분만 업데이트
+        row.querySelector('.video-file').innerText = videoFile;
+        
+        let progressBar = row.querySelector('.progress-bar');
+        progressBar.style.width = `${progress}%`;
+        progressBar.setAttribute('aria-valuenow', progress);
+        
+        row.querySelector('.status-cell').innerText = status;
+        row.querySelector('.estimated-cell').innerText = estimated;
+        
+        // 작업 버튼 업데이트 (필요한 경우에만 클래스나 텍스트를 수정)
+        let btn = row.querySelector('.action-cell button');
+        if (status === 'running') {
+            btn.className = 'btn btn-warning btn-sm cancel-btn';
+            btn.innerText = '중지';
+            btn.setAttribute('data-task-id', taskId);
+            btn.onclick = function() {
+                cancelTask(taskId);
+            };
+        } else {
+            btn.className = 'btn btn-danger btn-sm delete-btn';
+            btn.innerText = '삭제';
+            btn.setAttribute('data-task-id', taskId);
+            btn.onclick = function() {
+                deleteTask(taskId);
+            };
+        }
+    }
 }
 
 // CANCEL 요청을 보내고 작업 중지
 function cancelTask(taskId) {
     let formData = new FormData();
     formData.append('task_id', taskId);
-    fetch(`/cancel_ocr`, {
+    fetch(`/cancel_ocr/`, {
         method: 'POST',
         body: formData
     })
