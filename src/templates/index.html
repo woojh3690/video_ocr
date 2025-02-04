@@ -36,11 +36,12 @@
             <button id="back-to-list-btn" class="btn btn-secondary mb-3">작업 큐로 돌아가기</button>
             
             <div class="row mt-4">
-                <div class="col-md-6">
-                    <input type="file" id="video-upload" accept="video/*" class="form-control-file">
+                <div class="file-area">
+                    <input type="file" id="video-upload" accept="video/*" class="form-control-file" required>
+                    <div class="file-dummy">
+                        <span class="default">Click to select a file, or drag it here</span>
+                    </div>
                 </div>
-            </div>
-            <div class="row mt-4">
                 <div class="col-md-12 position-relative">
                     <div id="video-container" class="position-relative">
                         <video id="video" controls class="w-100"></video>

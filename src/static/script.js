@@ -188,10 +188,15 @@ backToListBtn.addEventListener('click', function() {
     switchToTaskListView();
 });
 
-// --- 기존 OCR 생성 뷰 관련 코드 (수정) ---
 
 // 비디오 업로드 및 로드
 videoUpload.addEventListener('change', function(e) {
+    // 비디오 컨테이너 표시
+    const targetDiv = document.querySelector("#video-container");
+    targetDiv.style.display = "block";
+    const fileArea = document.querySelector(".file-area");
+    fileArea.style.display = "none";
+
     let file = e.target.files[0];
     if (file) {
         // 비디오 업로드 및 로드
