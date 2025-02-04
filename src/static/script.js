@@ -72,7 +72,7 @@ function updateTaskRow(task) {
     
     // progress bar HTML
     let progressBarHtml = `<div class="progress">
-        <div class="progress-bar" role="progressbar" style="width: ${progress}%;" aria-valuenow="${progress}" aria-valuemin="0" aria-valuemax="100">${progress}%</div>
+        <div class="progress-bar" role="progressbar" style="width: ${progress}%;" aria-valuenow="${progress}" aria-valuemin="0" aria-valuemax="100"></div>
     </div>`;
     
     // Delete 버튼 (보여주려면 상태가 completed 또는 failed)
@@ -122,17 +122,6 @@ function deleteTask(taskId) {
         }
     })
     .catch(err => console.error(err));
-}
-
-// 시간 포맷 함수 (초 단위 -> hh:mm:ss)
-function formatTime(seconds) {
-    let hrs = Math.floor(seconds / 3600);
-    let mins = Math.floor((seconds % 3600) / 60);
-    let secs = Math.floor(seconds % 60);
-    let formattedHrs = hrs > 0 ? String(hrs).padStart(2, '0') + ':' : '';
-    let formattedMins = String(mins).padStart(2, '0');
-    let formattedSecs = String(secs).padStart(2, '0');
-    return formattedHrs + formattedMins + ':' + formattedSecs;
 }
 
 // 뷰 전환 함수
