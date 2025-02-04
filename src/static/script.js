@@ -3,8 +3,6 @@ let videoUpload = document.getElementById('video-upload');
 let startOcrBtn = document.getElementById('start-ocr-btn');
 let downloadBtn = document.getElementById('download-btn');
 let ocrProgressContainer = document.getElementById('ocr-progress-container');
-let ocrProgressBar = document.getElementById('ocr-progress');
-let ocrEstimatedCompletion = document.getElementById('ocr-estimated-completion');
 
 let boundingBox = document.getElementById('bounding-box');
 let handles = document.querySelectorAll('.handle');
@@ -22,7 +20,6 @@ let startTop = 0;
 let startLeft = 0;
 
 let vfilename = null;
-let currentOcrTaskId = null;  // OCR 생성 시 생성된 작업 ID
 
 // DOM 요소들: 작업 목록 뷰와 OCR 생성 뷰
 const taskListView = document.getElementById('task-list-view');
@@ -43,22 +40,6 @@ ws.onmessage = (event) => {
     let message = JSON.parse(event.data);
     // message는 { task_id, progress, status, estimated_completion, error, ... } 형태
     updateTaskRow(message);
-    
-    // 만약 현재 OCR 생성 중인 작업이라면 해당 UI도 업데이트
-    if (currentOcrTaskId && message.task_id === currentOcrTaskId) {
-        ocrProgressBar.value = message.progress;
-        if (message.estimated_completion >= 0) {
-            ocrEstimatedCompletion.textContent = '남은 예상 시간: 약 ' + formatTime(message.estimated_completion);
-        }
-        if (message.progress === 100 || message.status === "failed") {
-            downloadBtn.style.display = 'block';
-            if (message.status === "failed" && message.error) {
-                ocrEstimatedCompletion.textContent = "오류 발생: " + message.error;
-            } else if (message.progress === 100) {
-                ocrEstimatedCompletion.textContent = "OCR 완료";
-            }
-        }
-    }
 };
 
 ws.onerror = (err) => {
@@ -86,7 +67,7 @@ function updateTaskRow(task) {
     let existingRow = document.getElementById("task-row-" + taskId);
     let progress = task.progress || 0;
     let status = task.status || "";
-    let estimated = (typeof task.estimated_completion !== "undefined") ? task.estimated_completion : -1;
+    let estimated = (typeof task.estimated_completion !== "undefined") ? task.estimated_completion : "TDB";
     let videoFile = task.video_filename || "";
     
     // progress bar HTML
@@ -100,15 +81,12 @@ function updateTaskRow(task) {
         deleteBtnHtml = `<button class="btn btn-danger btn-sm delete-btn" data-task-id="${taskId}">삭제</button>`;
     }
     
-    // 예상 완료 시간 텍스트
-    let estimatedText = (estimated >= 0) ? estimated : "-";
-    
     let rowHtml = `
         <td>${taskId}</td>
         <td>${videoFile}</td>
         <td>${progressBarHtml}</td>
         <td>${status}</td>
-        <td>${estimatedText}</td>
+        <td>${estimated}</td>
         <td>${deleteBtnHtml}</td>
     `;
     
@@ -291,8 +269,6 @@ document.getElementById("intervalInput").addEventListener("input", (event) => {
 // OCR 시작: 이제 POST /start_ocr/를 호출하면 task_id를 받고, WebSocket 업데이트로 진행률이 표시됨.
 startOcrBtn.addEventListener('click', async function() {
     // 초기화
-    ocrProgressBar.value = 0;
-    ocrEstimatedCompletion.textContent = '';
     downloadBtn.style.display = 'none';
     
     // 바운딩 박스의 위치와 크기 계산
@@ -324,9 +300,7 @@ startOcrBtn.addEventListener('click', async function() {
             body: formData
         });
         let data = await response.json();
-        currentOcrTaskId = data.task_id;
-        // OCR 작업 생성 후 진행바 영역 표시
-        ocrProgressContainer.style.display = 'block';
+        switchToTaskListView();
     } catch (err) {
         alert('OCR 작업 시작 중 오류 발생: ' + err.message);
     }

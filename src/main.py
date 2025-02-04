@@ -157,9 +157,11 @@ async def start_ocr_endpoint(
 ):
     task_id = str(uuid.uuid4())
     tasks[task_id] = {
+        "task_id": task_id,
         "video_filename": video_filename,
         "status": "running",
         "progress": 0,
+        "estimated_completion": "TDB",
         "messages": [],
         "start_time": time.time()
     }
@@ -170,37 +172,27 @@ async def start_ocr_endpoint(
 
 
 async def run_ocr_task(task_id, video_filename, x, y, width, height, interval):
+    task = tasks[task_id]
     try:
-        async for progress_message in process_ocr(video_filename, x, y, width, height, interval):
-            # progress_message는 "data: {...}\n\n" 형식의 문자열
-            if progress_message.startswith("data:"):
-                try:
-                    json_str = progress_message[5:].strip()
-                    data = json.loads(json_str)
-                    tasks[task_id]["progress"] = data.get("progress", tasks[task_id]["progress"])
-                    tasks[task_id]["messages"].append(data)
-                    # 예상 완료 시간 계산
-                    estimated_time = calculate_estimated_completion(tasks[task_id])
-                    data["estimated_completion"] = estimated_time
-                    data["task_id"] = task_id
-                    # 전역 WebSocket 연결된 모든 클라이언트에게 업데이트 전송
-                    await broadcast_update(data)
-                except Exception as e:
-                    print("Progress message 처리 중 에러:", e)
+        async for progress in process_ocr(video_filename, x, y, width, height, interval):
+            try:
+                task["progress"] = progress
+                task["estimated_completion"] = calculate_estimated_completion(tasks[task_id])
+                # 전역 WebSocket 연결된 모든 클라이언트에게 업데이트 전송
+                await broadcast_update(task)
+            except Exception as e:
+                print("Progress message 처리 중 에러:", e)
         # OCR 작업 완료 후
-        tasks[task_id]["status"] = "completed"
+        task["status"] = "completed"
         filename_without_ext = os.path.splitext(os.path.basename(video_filename))[0]
         srt_path = os.path.join(UPLOAD_DIR, f"{filename_without_ext}.srt")
-        tasks[task_id]["result"] = srt_path if os.path.exists(srt_path) else None
-        
-        complete_data = {"progress": 100, "status": "completed", "estimated_completion": 0, "task_id": task_id}
-        await broadcast_update(complete_data)
+        task["result"] = srt_path if os.path.exists(srt_path) else None
+        await broadcast_update(task)
     except Exception as e:
-        tasks[task_id]["status"] = "failed"
-        tasks[task_id]["error"] = str(e)
+        task["status"] = "failed"
+        task["error"] = str(e)
         print("OCR 작업 중 에러:", e)
-        error_data = {"progress": tasks[task_id]["progress"], "status": "failed", "error": str(e), "task_id": task_id}
-        await broadcast_update(error_data)
+        await broadcast_update(task)
 
 
 async def broadcast_update(message: dict):
@@ -267,21 +259,20 @@ async def delete_task_endpoint(task_id: str):
 # ---------------------------
 # 예상 완료 시간 계산 함수 구현
 # ---------------------------
-def calculate_estimated_completion(task: Dict) -> int:
+def calculate_estimated_completion(task: Dict) -> str:
     """
-    작업 정보를 바탕으로 예상 완료 시간을 계산하여 초 단위로 반환합니다.
-    진행률(progress)이 0보다 크면,
-      - 경과 시간 = 현재 시각 - 작업 시작 시각
-      - 남은 시간 = (경과 시간) * (100 - progress) / progress
-    진행률이 0이면 -1을 반환합니다.
+    작업 정보를 바탕으로 작업 완료까지 남은 시간을 계산하여 HH:mm:ss 단위로 반환합니다.
+    진행률이 0이면 TDB 문자열을 반환합니다.
     """
     progress = task.get("progress", 0)
     start_time = task.get("start_time")
     if not start_time or progress <= 0:
-        return -1
+        return "TDB"
+    elif progress == 100:
+        return "00:00:00"
     elapsed = time.time() - start_time
     remaining = elapsed * (100 - progress) / progress
-    return int(remaining)
+    return time.strftime("%H:%M:%S", time.gmtime(remaining))
 
 
 # ---------------------------

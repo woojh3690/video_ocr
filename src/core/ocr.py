@@ -217,8 +217,7 @@ async def process_ocr(video_filename, x, y, width, height, interval=0.3):
 
             # 진행 상황 업데이트
             percentage = round((frame_number / total_frames) * 100, 2)
-            progress = f"data: {json.dumps({'progress': percentage})}\n\n"
-            yield progress
+            yield percentage
 
     # OCR 완료된 CSV 파일 읽기기
     ocr_text_data = []
