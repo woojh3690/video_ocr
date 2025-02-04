@@ -3,9 +3,14 @@
     margin-top: 20px;
 }
 
+.table td {
+    padding: .50rem;
+    vertical-align: middle;
+}
+
 #video-container {
     position: relative;
-    display: inline-block;
+    display: none;
 }
 
 #video {
@@ -73,10 +78,6 @@ input[type="number"] {
 }
 
 /* 비디오 선택 */
-#video-container {
-    display: none;
-}
-
 .file-area {
     width: 100%;
     position: relative;
