@@ -204,7 +204,7 @@ async def process_ocr(video_filename, x, y, width, height, interval=0.3):
             writer.writerow(entry)
 
             # llama.cpp - minicp-v 메모리 누수로 인한 일정 주기 모델 언로드
-            if frame_number is not 0 and frame_number % 1000 == 0:
+            if frame_number != 0 and frame_number % 1000 == 0:
                 print(f"모델 언로드 시작: {frame_number}")
                 response = await client.chat(
                     model='minicpm-v',
