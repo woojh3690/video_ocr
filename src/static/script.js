@@ -299,8 +299,16 @@ document.addEventListener('mouseup', function(e) {
 });
 
 // interval 설정
-document.getElementById("intervalInput").addEventListener("input", (event) => {
+const intervalInput = document.getElementById('intervalInput');
+intervalInput.addEventListener("input", (event) => {
     intervalValue = parseFloat(event.target.value);
+});
+
+const frameBasedOCRCheckbox = document.getElementById('frameBasedOCR');
+frameBasedOCRCheckbox.addEventListener('change', function() {
+    // 체크박스가 선택되면 숫자 입력 필드를 비활성화, 아니면 활성화합니다.
+    intervalInput.disabled = this.checked;
+    intervalValue = -1;
 });
 
 // OCR 시작: 이제 POST /start_ocr/를 호출하면 task_id를 받고, WebSocket 업데이트로 진행률이 표시됨.

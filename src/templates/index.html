@@ -8,7 +8,7 @@
 </head>
 <body>
     <div class="container mt-5">
-        <h1 class="text-center">비디오 OCR Dev2</h1>
+        <h1 class="text-center">비디오 OCR</h1>
         
         <!-- 작업 목록(큐) 뷰 -->
         <div id="task-list-view">
@@ -60,6 +60,10 @@
                 <div class="col-md-6">
                     <label for="intervalInput">OCR 간격(초):</label>
                     <input type="number" id="intervalInput" step="0.1" min="0.1" value="0.3">
+                    <div class="form-check mt-2">
+                        <input type="checkbox" class="form-check-input" id="frameBasedOCR">
+                        <label class="form-check-label" for="frameBasedOCR">1프레임 단위로 OCR 진행</label>
+                    </div>
                 </div>
             </div>
             <div class="row mt-4">
