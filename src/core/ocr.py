@@ -48,40 +48,50 @@ def make_few_shot_template(folder_path):
             })
     return messages
 
+# 가장 마지막으로 OCR 처리된 프레임 번호를 반환
+def get_last_processed_frame_number(csv_path, fieldnames) -> int:
+    last_frame_number = -1
+    if not os.path.exists(csv_path):
+        # 파일이 존재하지 않으면 초기 상태로 반환
+        writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
+        writer.writeheader()
+        csvfile.flush()
+    else:
+        # 파일이 존재하면 마지막 프레임 번호와 OCR 데이터를 로드
+        with open(csv_path, 'r', encoding='utf-8') as csvfile:
+            for row in csv.DictReader(csvfile):
+                frame_number = int(row['frame_number'])
+                last_frame_number = max(last_frame_number, frame_number)
+    return last_frame_number
+
+# 시간을 포맷팅
+def format_time(seconds):
+    hours = int(seconds // 3600)
+    minutes = int((seconds % 3600) // 60)
+    secs = int(seconds % 60)
+    millis = int((seconds - int(seconds)) * 1000)
+    return f"{hours:02}:{minutes:02}:{secs:02},{millis:03}"
+
 # 동영상 파일에서 프레임을 배치 단위로 생성하는 제너레이터.
 def frame_batch_generator(
     cap: cv2.VideoCapture, 
-    last_frame_number: int, 
     x, y, width, height, interval = 0.3,
-    start_time: float = 0,
-    end_time: float = None
+    end_frame: int = None
 ) -> Generator[List, None, None]:
-    last_frame_number = -1 if last_frame_number is None else last_frame_number
 
     # interval 초마다 OCR 수행
     frame_rate = cap.get(cv2.CAP_PROP_FPS)
     frame_interval = max(1, int(round(frame_rate * interval)))  # 최소 1프레임
 
-    frame_number = -1
     while True:
         # 프레임 읽기
         ret, frame = cap.read()
-        if not ret:
+        frame_number = int(cap.get(cv2.CAP_PROP_POS_FRAMES))
+
+        # 지정된 종료 프레임까지 도달하면 종료
+        if not ret or frame_number < end_frame:
             cap.release()
             break
-        frame_number += 1
-
-        current_time = frame_number / frame_rate  # 현재 프레임의 시간(초)
-        # 지정된 시작 시간 이전은 건너뜁니다.
-        if current_time < start_time:
-            continue
-        # 지정된 종료 시간을 넘으면 더 이상 처리하지 않습니다.
-        if end_time is not None and current_time > end_time:
-            break
-
-        # 처리된 않은 프레임 부터 OCR 진행
-        if frame_number <= last_frame_number:
-            continue
         
         # frame_interval 초마다 OCR 수행
         if frame_number % frame_interval != 0:
@@ -97,31 +107,6 @@ def frame_batch_generator(
 
         yield [frame_number, img_base64]
 
-# 가장 마지막으로 OCR 처리된 프레임 번호를 반환
-def get_last_processed_frame_number(csv_path) -> tuple[int, List]:
-    # 기존 OCR 데이터를 로드하여 진행 상황을 파악
-    last_frame_number = None
-
-    # 파일이 존재하지 않으면 초기 상태로 반환
-    if not os.path.exists(csv_path):
-        return last_frame_number
-    
-    # 파일이 존재하면 마지막 프레임 번호와 OCR 데이터를 로드
-    last_frame_number = -1
-    with open(csv_path, 'r', encoding='utf-8') as csvfile:
-        for row in csv.DictReader(csvfile):
-            frame_number = int(row['frame_number'])
-            last_frame_number = max(last_frame_number, frame_number)
-    return last_frame_number
-
-# 시간을 포맷팅
-def format_time(seconds):
-    hours = int(seconds // 3600)
-    minutes = int((seconds % 3600) // 60)
-    secs = int(seconds % 60)
-    millis = int((seconds - int(seconds)) * 1000)
-    return f"{hours:02}:{minutes:02}:{secs:02},{millis:03}"
-    
 async def process_ocr(
     video_filename, 
     x, y, width, height, 
@@ -139,47 +124,47 @@ async def process_ocr(
     # few-shot 템플릿 생성
     messages_template = make_few_shot_template("./few_shot")
 
+    # 마지막으로 OCR 처리된 프레임 번호 확인
+    fieldnames = ['frame_number', 'time', 'text']
+    last_frame_number = get_last_processed_frame_number(csv_path, fieldnames)
+
     # 영상 정보 추출
     cap = cv2.VideoCapture(video_path)
     if not cap.isOpened():
         raise ValueError(f"Cannot open video file: {video_path}")
-    cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
-    total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
-    frame_rate = cap.get(cv2.CAP_PROP_FPS)
+    frame_rate = cap.get(cv2.CAP_PROP_FPS) # 초당 프레임 수
+    start_frame = int(start_time * frame_rate) # OCR 시작 프레임
+    end_frame = int(cap.get(cv2.CAP_PROP_FRAME_COUNT)) if end_time is None else int(end_time * frame_rate) # OCR 종료 프레임
+    total_frames = end_frame - start_frame # OCR 을 진행할 총 프레임 수
+
+    # OCR 을 진행할 프레임으로 이동 
+    start_ocr_frame = max(start_frame, last_frame_number)
+    cap.set(cv2.CAP_PROP_POS_FRAMES, start_ocr_frame) 
 
     # ollama 클라이언트 초기화
     client = ollama.AsyncClient(host=ollama_ip)
 
-    # CSV 파일을 열어둔 채로 진행
-    last_frame_number = get_last_processed_frame_number(csv_path)
+    # CSV 파일에 OCR 결과를 저장하면 진행
     with open(csv_path, 'a', newline='', encoding='utf-8') as csvfile:
         fieldnames = ['frame_number', 'time', 'text']
         writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
-        if last_frame_number is None:
-            writer.writeheader()
-            csvfile.flush()
 
-        for frame in frame_batch_generator(cap, last_frame_number, x, y, width, height, interval, start_time, end_time):
+        for frame in frame_batch_generator(cap, x, y, width, height, interval, end_frame):
             frame_number = frame[0]
             img_base64 = frame[1]
 
             messages = copy.deepcopy(messages_template)
-            messages.append(
-                {
-                    "role": "user",
-                    "images": [img_base64]
-                }
-            )
+            messages.append({
+                "role": "user",
+                "images": [img_base64]
+            })
 
             # OCR 수행
             try:
                 response = await client.chat(
                     model='minicpm-v',
                     format=OcrSubtitleGroup.model_json_schema(),
-                    options={
-                        'temperature': 0,
-                        'num_predict': 512
-                    },
+                    options={ 'temperature': 0, 'num_predict': 512 },
                     messages=messages
                 )
             except Exception as e:
