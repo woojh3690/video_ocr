@@ -152,7 +152,9 @@ async def start_ocr_endpoint(
     y: int = Form(...), 
     width: int = Form(...), 
     height: int = Form(...), 
-    interval_value: float = Form(...)
+    interval_value: float = Form(...),
+    start_time: float = Form(...),
+    end_time: float = Form(...)
 ):
     task_id = str(uuid.uuid4())
     tasks[task_id] = {
@@ -163,18 +165,18 @@ async def start_ocr_endpoint(
         "estimated_completion": "TDB",
         "messages": [],
         "start_time": time.time(),
-        "cancelled": False  # 취소 플래그 추가
+        "cancelled": False
     }
     
     # 백그라운드에서 OCR 작업 실행
-    asyncio.create_task(run_ocr_task(task_id, video_filename, x, y, width, height, interval_value))
+    asyncio.create_task(run_ocr_task(task_id, video_filename, x, y, width, height, interval_value, start_time, end_time))
     return {"task_id": task_id}
 
 
-async def run_ocr_task(task_id, video_filename, x, y, width, height, interval):
+async def run_ocr_task(task_id, video_filename, x, y, width, height, interval, start_time, end_time):
     task = tasks[task_id]
     try:
-        async for progress in process_ocr(video_filename, x, y, width, height, interval):
+        async for progress in process_ocr(video_filename, x, y, width, height, interval, start_time, end_time):
             # 취소 요청이 들어왔는지 확인
             if task.get("cancelled"):
                 task["status"] = "cancelled"

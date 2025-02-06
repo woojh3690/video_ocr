@@ -52,7 +52,9 @@ def make_few_shot_template(folder_path):
 def frame_batch_generator(
     cap: cv2.VideoCapture, 
     last_frame_number: int, 
-    x, y, width, height, interval = 0.3
+    x, y, width, height, interval = 0.3,
+    start_time: float = 0,
+    end_time: float = None
 ) -> Generator[List, None, None]:
     last_frame_number = -1 if last_frame_number is None else last_frame_number
 
@@ -69,11 +71,19 @@ def frame_batch_generator(
             break
         frame_number += 1
 
+        current_time = frame_number / frame_rate  # 현재 프레임의 시간(초)
+        # 지정된 시작 시간 이전은 건너뜁니다.
+        if current_time < start_time:
+            continue
+        # 지정된 종료 시간을 넘으면 더 이상 처리하지 않습니다.
+        if end_time is not None and current_time > end_time:
+            break
+
         # 처리된 않은 프레임 부터 OCR 진행
         if frame_number <= last_frame_number:
             continue
         
-        # 0.3초마다 OCR 수행
+        # frame_interval 초마다 OCR 수행
         if frame_number % frame_interval != 0:
             continue
 
@@ -112,7 +122,13 @@ def format_time(seconds):
     millis = int((seconds - int(seconds)) * 1000)
     return f"{hours:02}:{minutes:02}:{secs:02},{millis:03}"
     
-async def process_ocr(video_filename, x, y, width, height, interval=0.3):
+async def process_ocr(
+    video_filename, 
+    x, y, width, height, 
+    interval=0.3, 
+    start_time=0, 
+    end_time=None
+):
     # 파일 경로 정보 초기화
     UPLOAD_DIR = "uploads"
     video_path = os.path.join(UPLOAD_DIR, video_filename)
@@ -139,11 +155,11 @@ async def process_ocr(video_filename, x, y, width, height, interval=0.3):
     with open(csv_path, 'a', newline='', encoding='utf-8') as csvfile:
         fieldnames = ['frame_number', 'time', 'text']
         writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
-        if last_frame_number == None:
+        if last_frame_number is None:
             writer.writeheader()
             csvfile.flush()
 
-        for frame in frame_batch_generator(cap, last_frame_number, x, y, width, height, interval):
+        for frame in frame_batch_generator(cap, last_frame_number, x, y, width, height, interval, start_time, end_time):
             frame_number = frame[0]
             img_base64 = frame[1]
 

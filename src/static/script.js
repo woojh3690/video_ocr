@@ -328,6 +328,12 @@ startOcrBtn.addEventListener('click', async function() {
     width = Math.round(width * scaleX);
     height = Math.round(height * scaleY);
     
+    // 새롭게 추가된 시간대 값 읽기 (초 단위)
+    const startTimeInput = document.getElementById('startTimeInput');
+    const endTimeInput = document.getElementById('endTimeInput');
+    let startTime = parseFloat(startTimeInput.value);
+    let endTime = parseFloat(endTimeInput.value);
+    
     let formData = new FormData();
     formData.append('video_filename', videoUpload.files[0].name);
     formData.append('x', x);
@@ -335,6 +341,8 @@ startOcrBtn.addEventListener('click', async function() {
     formData.append('width', width);
     formData.append('height', height);
     formData.append('interval_value', intervalValue);
+    formData.append('start_time', startTime);
+    formData.append('end_time', endTime);
     
     try {
         let response = await fetch('/start_ocr/', {
