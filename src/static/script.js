@@ -311,6 +311,20 @@ frameBasedOCRCheckbox.addEventListener('change', function() {
     intervalValue = -1;
 });
 
+// mm:ss 형식의 문자열을 초 단위로 변환하는 함수 (예: "02:30" -> 150초)
+function parseTimeString(timeStr) {
+    const parts = timeStr.split(':');
+    if (parts.length === 2) {
+        const minutes = parseInt(parts[0], 10);
+        const seconds = parseFloat(parts[1]);
+        if (isNaN(minutes) || isNaN(seconds)) {
+            return 0;
+        }
+        return minutes * 60 + seconds;
+    }
+    return 0;
+}
+
 // OCR 시작: 이제 POST /start_ocr/를 호출하면 task_id를 받고, WebSocket 업데이트로 진행률이 표시됨.
 startOcrBtn.addEventListener('click', async function() {
     // 바운딩 박스의 위치와 크기 계산
@@ -331,8 +345,8 @@ startOcrBtn.addEventListener('click', async function() {
     // 새롭게 추가된 시간대 값 읽기 (초 단위)
     const startTimeInput = document.getElementById('startTimeInput');
     const endTimeInput = document.getElementById('endTimeInput');
-    let startTime = parseFloat(startTimeInput.value);
-    let endTime = parseFloat(endTimeInput.value);
+    let startTime = parseTimeString(startTimeInput.value);
+    let endTime = parseTimeString(endTimeInput.value);
     
     let formData = new FormData();
     formData.append('video_filename', videoUpload.files[0].name);

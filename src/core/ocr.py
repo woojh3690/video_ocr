@@ -53,9 +53,10 @@ def get_last_processed_frame_number(csv_path, fieldnames) -> int:
     last_frame_number = -1
     if not os.path.exists(csv_path):
         # 파일이 존재하지 않으면 초기 상태로 반환
-        writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
-        writer.writeheader()
-        csvfile.flush()
+        with open(csv_path, 'a', newline='', encoding='utf-8') as csvfile:
+            writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
+            writer.writeheader()
+            csvfile.flush()
     else:
         # 파일이 존재하면 마지막 프레임 번호와 OCR 데이터를 로드
         with open(csv_path, 'r', encoding='utf-8') as csvfile:
