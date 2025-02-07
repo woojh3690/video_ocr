@@ -32,14 +32,13 @@
         
         <!-- OCR 작업 생성 뷰 (초기엔 숨김) -->
         <div id="ocr-creation-view" style="display:none;">
-            <!-- 뒤로가기 버튼 -->
-            <button id="back-to-list-btn" class="btn btn-secondary mb-3">작업 큐로 돌아가기</button>
-            
             <div class="row mt-4">
-                <div class="file-area">
-                    <input type="file" id="video-upload" accept="video/*" class="form-control-file" required>
-                    <div class="file-dummy">
-                        <span class="default">Click to select a file, or drag it here</span>
+                <div class="col-md-12">
+                    <div class="file-area">
+                        <input type="file" id="video-upload" accept="video/*" class="form-control-file" required>
+                        <div class="file-dummy">
+                            <span class="default">파일을 선택하려면 클릭하거나 파일을 여기에 드래그하세요.</span>
+                        </div>
                     </div>
                 </div>
                 <div class="col-md-12 position-relative">
@@ -67,17 +66,21 @@
                 </div>
             </div>
             <div class="row mt-4">
-                <div class="col-md-6">
+                <div class="col-md-2">
                     <label for="startTimeInput">OCR 시작 시간 (초):</label>
                     <input type="text" id="startTimeInput" placeholder="mm:ss" value="00:00" class="form-control">
                 </div>
-                <div class="col-md-6">
+                <div class="col-md-2">
                     <label for="endTimeInput">OCR 종료 시간 (초):</label>
                     <input type="text" id="endTimeInput" placeholder="mm:ss" value="00:10" class="form-control">
                 </div>
+                <div class="col-md-8"></div>
             </div>
             <div class="row mt-4">
-                <button id="start-ocr-btn" class="btn btn-success">OCR 시작</button>
+                <div class="col-md-12">
+                    <button id="back-to-list-btn" class="btn btn-secondary float-left">작업 큐로 돌아가기</button>
+                    <button id="start-ocr-btn" class="btn btn-success float-right">OCR 시작</button>
+                </div>
             </div>
         </div>
         
