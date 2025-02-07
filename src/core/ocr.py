@@ -90,7 +90,7 @@ def frame_batch_generator(
         frame_number = int(cap.get(cv2.CAP_PROP_POS_FRAMES))
 
         # 지정된 종료 프레임까지 도달하면 종료
-        if not ret or frame_number < end_frame:
+        if not ret or frame_number > end_frame:
             cap.release()
             break
         
@@ -217,7 +217,7 @@ async def process_ocr(
                 print("모델 언로드 완료")
 
             # 진행 상황 업데이트
-            percentage = round((frame_number / total_frames) * 100, 2)
+            percentage = round((frame_number - start_frame) / total_frames * 100, 2)
             yield percentage
 
     # OCR 완료된 CSV 파일 읽기기
