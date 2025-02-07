@@ -325,7 +325,8 @@ function parseTimeString(timeStr) {
     return 0;
 }
 
-// OCR 시작: 이제 POST /start_ocr/를 호출하면 task_id를 받고, WebSocket 업데이트로 진행률이 표시됨.
+// OCR 시작
+// POST start_ocr를 호출하면 task_id를 받고, WebSocket 업데이트로 진행률이 표시됨.
 startOcrBtn.addEventListener('click', async function() {
     // 바운딩 박스의 위치와 크기 계산
     let videoRect = video.getBoundingClientRect();
@@ -363,9 +364,23 @@ startOcrBtn.addEventListener('click', async function() {
             method: 'POST',
             body: formData
         });
+        
+        // 응답이 정상(200~299) 범위가 아닌 경우
+        if (!response.ok) {
+            let errorData = await response.json();
+            // 응답 메시지가 {"detail": "오류 메시지"} 형식이므로 detail 필드 사용
+            alert('OCR 작업 시작 중 오류 발생: ' + errorData.detail);
+            switchToTaskListView();
+            return;
+        }
+        
+        // 정상 응답일 경우
         let data = await response.json();
+        console.log(data.task_id)
         switchToTaskListView();
     } catch (err) {
+        // 네트워크 오류 등 예외 발생 시
         alert('OCR 작업 시작 중 오류 발생: ' + err.message);
+        switchToTaskListView();
     }
 });
