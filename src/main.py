@@ -9,12 +9,14 @@ import pickle
 import atexit
 import signal
 from typing import Dict, List
+from typing import Optional
 
 from fastapi import FastAPI, UploadFile, File, Form, HTTPException, Request, WebSocket, WebSocketDisconnect
 from fastapi.responses import HTMLResponse, StreamingResponse, FileResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 import aiofiles
+import cv2
 
 from core.ocr import process_ocr
 
@@ -141,7 +143,6 @@ async def get_video(request: Request, video_filename: str):
         headers['Accept-Ranges'] = 'bytes'
         return FileResponse(video_path, headers=headers, media_type='video/mp4')
 
-
 # ---------------------------
 # 백그라운드 OCR 작업 관련 함수 및 엔드포인트
 # ---------------------------
@@ -153,9 +154,44 @@ async def start_ocr_endpoint(
     width: int = Form(...), 
     height: int = Form(...), 
     interval_value: float = Form(...),
-    start_time: float = Form(...),
-    end_time: float = Form(...)
+    start_time: Optional[int] = Form(0),
+    end_time: Optional[int] = Form(None)
 ):
+    # 비디오 파일 존재 여부 및 재생 시간(초) 계산
+    video_path = os.path.join(UPLOAD_DIR, video_filename)
+    if not os.path.exists(video_path):
+        raise HTTPException(status_code=404, detail="비디오 파일을 찾을 수 없습니다.")
+    
+    cap = cv2.VideoCapture(video_path)
+    if not cap.isOpened():
+        raise HTTPException(status_code=400, detail="비디오 파일을 열 수 없습니다.")
+    
+    frame_count = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+    fps = cap.get(cv2.CAP_PROP_FPS)
+    if fps <= 0:
+        cap.release()
+        raise HTTPException(status_code=400, detail="FPS 값을 확인할 수 없습니다.")
+    duration = frame_count / fps  # 비디오의 총 재생 시간(초)
+    cap.release()
+    
+    # 범위 체크: start_time과 end_time이 올바른지 검증
+    if start_time < 0:
+        raise HTTPException(status_code=400, detail="시작 시간은 0보다 작을 수 없습니다.")
+    if start_time >= duration:
+        raise HTTPException(
+            status_code=400, 
+            detail=f"시작 시간({start_time}s)이 비디오 재생 시간({duration:.2f}s)보다 큽니다."
+        )
+    if end_time is not None:
+        if end_time > duration:
+            raise HTTPException(
+                status_code=400, 
+                detail=f"종료 시간({end_time}s)이 비디오 재생 시간({duration:.2f}s)보다 큽니다."
+            )
+        if end_time <= start_time:
+            raise HTTPException(status_code=400, detail="종료 시간은 시작 시간보다 커야 합니다.")
+    
+    # 작업(task) 생성
     task_id = str(uuid.uuid4())
     tasks[task_id] = {
         "task_id": task_id,
@@ -169,9 +205,10 @@ async def start_ocr_endpoint(
     }
     
     # 백그라운드에서 OCR 작업 실행
-    asyncio.create_task(run_ocr_task(task_id, video_filename, x, y, width, height, interval_value, start_time, end_time))
+    asyncio.create_task(
+        run_ocr_task(task_id, video_filename, x, y, width, height, interval_value, start_time, end_time)
+    )
     return {"task_id": task_id}
-
 
 async def run_ocr_task(task_id, video_filename, x, y, width, height, interval, start_time, end_time):
     task = tasks[task_id]
