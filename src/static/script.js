@@ -356,8 +356,12 @@ startOcrBtn.addEventListener('click', async function() {
     formData.append('width', width);
     formData.append('height', height);
     formData.append('interval_value', intervalValue);
-    formData.append('start_time', startTime);
-    formData.append('end_time', endTime);
+    if (startTime != 0) {
+        formData.append('start_time', startTime);
+    }
+    if (endTime != 0) {
+        formData.append('end_time', endTime);
+    }
     
     try {
         let response = await fetch('/start_ocr/', {
