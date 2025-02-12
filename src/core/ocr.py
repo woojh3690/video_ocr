@@ -3,10 +3,12 @@ import csv
 import copy
 import base64
 from typing import List, Generator
+from collections import Counter
 
 import cv2
 import ollama
 from pydantic import BaseModel, ValidationError
+from langdetect import detect
 
 from core.merging_module import merge_ocr_texts  # 모듈 임포트
 
@@ -120,7 +122,6 @@ async def process_ocr(
     video_path = os.path.join(UPLOAD_DIR, video_filename)
     filename_without_ext = os.path.splitext(os.path.basename(video_filename))[0]
     csv_path = os.path.join(UPLOAD_DIR, f"{filename_without_ext}.csv")
-    srt_path = os.path.join(UPLOAD_DIR, f"{filename_without_ext}.srt")
 
     # few-shot 템플릿 생성
     messages_template = make_few_shot_template("./few_shot")
@@ -229,6 +230,11 @@ async def process_ocr(
                 'time': float(row['time']),
                 'text': row['text'],
             })
+
+    # 언어 감지 및 자막 저장 경로 설정
+    langs = [detect(ocr_text['text']) for ocr_text in ocr_text_data[:10]]
+    most_common_lang = Counter(langs).most_common(1)[0][0] if langs else None
+    srt_path = os.path.join(UPLOAD_DIR, f"{filename_without_ext}.{most_common_lang}.srt")
 
     # 텍스트 병합 모듈 사용
     ocr_progress_data = merge_ocr_texts(ocr_text_data)

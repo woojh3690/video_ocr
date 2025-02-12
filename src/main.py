@@ -1,4 +1,5 @@
 import os
+import glob
 import sys
 import re
 import shutil
@@ -348,10 +349,14 @@ async def websocket_endpoint(websocket: WebSocket):
 
 @app.get("/download_srt/{video_filename}")
 async def download_srt(video_filename: str):
-    video_filename = os.path.splitext(os.path.basename(video_filename))[0]
-    subtitle_name = f"{video_filename}.srt"
-    srt_file = os.path.join(UPLOAD_DIR, subtitle_name)
-    if os.path.exists(srt_file):
-        return FileResponse(srt_file, media_type='application/octet-stream', filename=subtitle_name)
+    base_name = os.path.splitext(os.path.basename(video_filename))[0]
+    pattern = os.path.join(UPLOAD_DIR, f"{base_name}.??.srt")
+    matching_files = glob.glob(pattern)
+    
+    if matching_files:
+        # 매칭되는 파일이 여러 개라면 첫 번째 파일을 선택합니다.
+        srt_file = matching_files[0]
+        file_name = os.path.basename(srt_file)
+        return FileResponse(srt_file, media_type='application/octet-stream', filename=file_name)
     else:
         return {"error": "SRT file not found"}
