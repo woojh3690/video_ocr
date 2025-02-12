@@ -9,6 +9,7 @@ import time
 import pickle
 import atexit
 import signal
+import traceback
 from typing import Dict, List
 from typing import Optional
 
@@ -237,6 +238,7 @@ async def run_ocr_task(task_id, video_filename, x, y, width, height, interval, s
         task["status"] = "failed"
         task["error"] = str(e)
         print("OCR 작업 중 에러:", e)
+        traceback.print_exc()
         await broadcast_update(task)
 
 

@@ -232,8 +232,8 @@ async def process_ocr(
             })
 
     # 언어 감지 및 자막 저장 경로 설정
-    langs = [detect(ocr_text['text']) for ocr_text in ocr_text_data[:10]]
-    most_common_lang = Counter(langs).most_common(1)[0][0] if langs else None
+    langs = [detect(x['text']) for x in ocr_text_data[:10] if x['text']]
+    most_common_lang = Counter(langs).most_common(1)[0][0] if langs else "un"
     srt_path = os.path.join(UPLOAD_DIR, f"{filename_without_ext}.{most_common_lang}.srt")
 
     # 텍스트 병합 모듈 사용
