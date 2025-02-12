@@ -374,7 +374,6 @@ startOcrBtn.addEventListener('click', async function() {
             let errorData = await response.json();
             // 응답 메시지가 {"detail": "오류 메시지"} 형식이므로 detail 필드 사용
             alert('OCR 작업 시작 중 오류 발생: ' + errorData.detail);
-            switchToTaskListView();
             return;
         }
         
@@ -385,6 +384,5 @@ startOcrBtn.addEventListener('click', async function() {
     } catch (err) {
         // 네트워크 오류 등 예외 발생 시
         alert('OCR 작업 시작 중 오류 발생: ' + err.message);
-        switchToTaskListView();
     }
 });
