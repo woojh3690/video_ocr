@@ -206,17 +206,6 @@ async def process_ocr(
             }
             writer.writerow(entry)
 
-            # llama.cpp - minicp-v 메모리 누수로 인한 일정 주기 모델 언로드
-            if frame_number != 0 and frame_number % 1000 == 0:
-                print(f"모델 언로드 시작: {frame_number}")
-                response = await client.chat(
-                    model='minicpm-v',
-                    keep_alive=0
-                )
-                content = response.message.content
-                print(content)
-                print("모델 언로드 완료")
-
             # 진행 상황 업데이트
             percentage = round((frame_number - start_frame) / total_frames * 100, 2)
             yield percentage
