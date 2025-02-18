@@ -9,6 +9,7 @@ import cv2
 import ollama
 from pydantic import BaseModel, ValidationError
 from langdetect import detect
+from langdetect.lang_detect_exception import LangDetectException
 
 from core.merging_module import merge_ocr_texts  # 모듈 임포트
 
@@ -221,7 +222,17 @@ async def process_ocr(
             })
 
     # 언어 감지 및 자막 저장 경로 설정
-    langs = [detect(x['text']) for x in ocr_text_data[:10] if x['text']]
+    langs = []
+    for entry in ocr_text_data:
+        text_content = entry['text'].strip()
+        if text_content:
+            try:
+                lang_detected = detect(text_content)
+                langs.append(lang_detected)
+            except LangDetectException:
+                pass
+        if len(langs) >= 10:
+            break
     most_common_lang = Counter(langs).most_common(1)[0][0] if langs else "un"
     srt_path = os.path.join(UPLOAD_DIR, f"{filename_without_ext}.{most_common_lang}.srt")
 
