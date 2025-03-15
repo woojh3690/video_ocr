@@ -352,7 +352,7 @@ async def websocket_endpoint(websocket: WebSocket):
 @app.get("/download_srt/{video_filename}")
 async def download_srt(video_filename: str):
     base_name = os.path.splitext(os.path.basename(video_filename))[0]
-    pattern = os.path.join(UPLOAD_DIR, f"{base_name}.??.srt")
+    pattern = os.path.join(UPLOAD_DIR, f"{glob.escape(base_name)}.??.srt")
     matching_files = glob.glob(pattern)
     
     if matching_files:
