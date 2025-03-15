@@ -192,7 +192,8 @@ async def process_ocr(
             ## OCR 결과가 없는 경우 처리
             if any(phrase in ocr_text for phrase in [
                 "image does not contain any", 
-                "There is no visible text in this image."
+                "There is no visible text in this image.",
+                "I'm so sorry"
             ]):
                 ocr_text = ""
 
