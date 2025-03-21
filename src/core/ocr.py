@@ -15,8 +15,13 @@ from core.merging_module import merge_ocr_texts  # 모듈 임포트
 
 ollama_ip = os.environ['OLLAMA_IP']
 
-system_prompt = 'OCR all the text from image following JSON: \n\
-{\"texts\":[\"example\"]}'
+system_prompt = """
+OCR all the text from image following JSON:
+{"texts":["example"]}
+
+If there is no other text from image then:
+{"texts":[""]}
+"""
 
 class OcrSubtitleGroup(BaseModel):
     texts: list[str]
@@ -193,7 +198,6 @@ async def process_ocr(
             if any(phrase in ocr_text for phrase in [
                 "image does not contain any", 
                 "There is no visible text in this image.",
-                "I'm so sorry"
             ]):
                 ocr_text = ""
 
