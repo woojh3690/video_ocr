@@ -213,6 +213,7 @@ async def start_ocr_endpoint(
     return {"task_id": task_id}
 
 async def run_ocr_task(task_id, video_filename, x, y, width, height, interval, start_time, end_time):
+    print(f"[시작] {task_id} - {video_filename}")
     task = tasks[task_id]
     try:
         async for progress in process_ocr(video_filename, x, y, width, height, interval, start_time, end_time):
