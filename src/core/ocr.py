@@ -13,7 +13,8 @@ from langdetect.lang_detect_exception import LangDetectException
 
 from core.merging_module import merge_ocr_texts  # 모듈 임포트
 
-ollama_ip = os.environ['OLLAMA_IP']
+ollama_ip = os.getenv['OLLAMA_IP']
+ollama_model = os.getenv['OLLAMA_MODEL', 'minicpm-v']
 
 system_prompt = """
 OCR all the text from image following JSON:
@@ -170,7 +171,7 @@ async def process_ocr(
             # OCR 수행
             try:
                 response = await client.chat(
-                    model='minicpm-v',
+                    model=ollama_model,
                     format=OcrSubtitleGroup.model_json_schema(),
                     options={ 'temperature': 0, 'num_predict': 512 },
                     messages=messages
