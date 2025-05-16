@@ -13,8 +13,8 @@ from langdetect.lang_detect_exception import LangDetectException
 
 from core.merging_module import merge_ocr_texts  # 모듈 임포트
 
-ollama_ip = os.getenv['OLLAMA_IP']
-ollama_model = os.getenv['OLLAMA_MODEL', 'minicpm-v']
+ollama_ip = os.getenv('OLLAMA_IP')
+ollama_model = os.getenv('OLLAMA_MODEL', 'minicpm-v')
 
 system_prompt = """
 OCR all the text from image following JSON:
