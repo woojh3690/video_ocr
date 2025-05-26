@@ -177,7 +177,9 @@ async def process_ocr(
                     messages=messages
                 )
             except Exception as e:
-                print(e)
+                print("OCR 요청 중 에러 발생:")
+                print(f"Frame {frame_number}: {e}")
+                continue
             
             content = response.message.content
             try:
