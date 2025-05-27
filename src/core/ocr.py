@@ -6,56 +6,26 @@ from typing import List, Generator
 from collections import Counter
 
 import cv2
-import ollama
-from pydantic import BaseModel, ValidationError
+import openai
+from pydantic import BaseModel
 from langdetect import detect
 from langdetect.lang_detect_exception import LangDetectException
 
 from core.merging_module import merge_ocr_texts  # 모듈 임포트
 
-ollama_ip = os.getenv('OLLAMA_IP')
-ollama_model = os.getenv('OLLAMA_MODEL', 'minicpm-v')
+base_url: str | None = os.getenv("LLM_BASE_URL")
+llm_model: str = os.getenv("LLM_MODEL", "Qwen/Qwen2.5-VL-3B-Instruct")
 
 system_prompt = """
 OCR all the text from image following JSON:
-{"texts":["example"]}
+{"texts":"example"}
 
 If there is no other text from image then:
-{"texts":[""]}
+{"texts":""}
 """
 
 class OcrSubtitleGroup(BaseModel):
-    texts: list[str]
-
-def make_few_shot_template(folder_path):
-    messages = [
-        {
-            "role": "system",
-            "content": system_prompt,
-        }
-    ]
-
-    example_file = os.path.join(folder_path, "answer.txt")
-
-    if not os.path.exists(example_file):
-        return messages
-    
-    with open(example_file, "r", encoding="utf-8") as f:
-        lines = f.readlines()
-        for i, line in enumerate(lines):
-            line = line.strip()
-            if not line: continue
-
-            example_image = os.path.join(folder_path, f"shot{i}.jpg")
-            messages.append({
-                "role": "user",
-                "images": [example_image]
-            })
-            messages.append({
-                "role": "assistant",
-                "content": line
-            })
-    return messages
+    texts: str
 
 # 가장 마지막으로 OCR 처리된 프레임 번호를 반환
 def get_last_processed_frame_number(csv_path, fieldnames) -> int:
@@ -130,9 +100,6 @@ async def process_ocr(
     filename_without_ext = os.path.splitext(os.path.basename(video_filename))[0]
     csv_path = os.path.join(UPLOAD_DIR, f"{filename_without_ext}.csv")
 
-    # few-shot 템플릿 생성
-    messages_template = make_few_shot_template("./few_shot")
-
     # 마지막으로 OCR 처리된 프레임 번호 확인
     fieldnames = ['frame_number', 'time', 'text']
     last_frame_number = get_last_processed_frame_number(csv_path, fieldnames)
@@ -151,7 +118,10 @@ async def process_ocr(
     cap.set(cv2.CAP_PROP_POS_FRAMES, start_ocr_frame) 
 
     # ollama 클라이언트 초기화
-    client = ollama.AsyncClient(host=ollama_ip)
+    client = openai.AsyncOpenAI(
+        api_key="dummy_key",
+        base_url=base_url,
+    )
 
     # CSV 파일에 OCR 결과를 저장하면 진행
     with open(csv_path, 'a', newline='', encoding='utf-8') as csvfile:
@@ -162,44 +132,30 @@ async def process_ocr(
             frame_number = frame[0]
             img_base64 = frame[1]
 
-            messages = copy.deepcopy(messages_template)
-            messages.append({
-                "role": "user",
-                "images": [img_base64]
-            })
+            messages = [
+                { "role": "system", "content": system_prompt },
+                { "role": "user", 
+                    "content": [
+                        {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{img_base64}"}}
+                    ] 
+                }
+            ]
 
             # OCR 수행
             try:
-                response = await client.chat(
-                    model=ollama_model,
-                    format=OcrSubtitleGroup.model_json_schema(),
-                    options={ 'temperature': 0, 'num_predict': 512 },
-                    messages=messages
+                completion = await client.beta.chat.completions.parse(
+                    model=llm_model,
+                    messages=messages,
+                    response_format=OcrSubtitleGroup,
+                    temperature=0,
+                    max_tokens=512,
                 )
+                ocr_text = completion.choices[0].message.parsed.texts
             except Exception as e:
                 print(e)
             
-            content = response.message.content
-            try:
-                ocr_subtitles_group = OcrSubtitleGroup.model_validate_json(content).texts
-            except ValidationError:
-                print(f"{frame_number} 프레임 JSON 디코딩 에러:")
-                print(content)
-                continue
-            
-            # 후처리
-            ## 줄 병합
-            ocr_text = "\\n".join(text.strip() for text in ocr_subtitles_group)
-
             # OCR 결과가 없는 경우 처리
             if len(ocr_text) == 1 or ocr_text == "example":
-                ocr_text = ""
-
-            ## OCR 결과가 없는 경우 처리
-            if any(phrase in ocr_text for phrase in [
-                "image does not contain any", 
-                "There is no visible text in this image.",
-            ]):
                 ocr_text = ""
 
             if ocr_text:
