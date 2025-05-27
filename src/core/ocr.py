@@ -1,6 +1,5 @@
 import os
 import csv
-import copy
 import base64
 from typing import List, Generator
 from collections import Counter
