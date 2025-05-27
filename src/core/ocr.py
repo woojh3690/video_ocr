@@ -152,7 +152,9 @@ async def process_ocr(
                 )
                 ocr_text = completion.choices[0].message.parsed.texts
             except Exception as e:
-                print(e)
+                print("OCR 요청 중 에러 발생:")
+                print(f"Frame {frame_number}: {e}")
+                continue
             
             # OCR 결과가 없는 경우 처리
             if len(ocr_text) == 1 or ocr_text == "example":
