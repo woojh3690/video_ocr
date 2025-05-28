@@ -39,7 +39,7 @@ def get_init_subtitle(current_time, ocr_text) -> Subtitle:
         history= [ocr_text]
     )
 
-def merge_ocr_texts(ocr_text_data, similarity_threshold=70) -> list[Subtitle]:
+def merge_ocr_texts(ocr_text_data, similarity_threshold=60) -> list[Subtitle]:
     ocr_progress_data: list[Subtitle] = []
     current_subtitle: Subtitle = None
 
