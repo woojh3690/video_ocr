@@ -1,4 +1,5 @@
 import re
+import unicodedata
 from dataclasses import dataclass
 
 from thefuzz import fuzz
@@ -9,6 +10,10 @@ class Subtitle:
     end_time: float
     text: str
     history: list[str]
+
+def normalize_text(text):
+    # NFKC 정규화를 통해 full-width 문자를 half-width 문자로 변환합니다.
+    return unicodedata.normalize('NFKC', text)
 
 def is_valid_text(text):
     # 텍스트가 None이거나 빈 문자열인 경우
@@ -57,7 +62,10 @@ def merge_ocr_texts(ocr_text_data, similarity_threshold=60) -> list[Subtitle]:
             current_subtitle = get_init_subtitle(current_time, ocr_text)
         else:
             # 자막 유사성 및 자막 공백 카운트를 고려하여 자막 병합
-            similarity = fuzz.ratio(current_subtitle.text, ocr_text)
+            similarity = fuzz.ratio(
+                normalize_text(current_subtitle.text), 
+                normalize_text(ocr_text)
+            )
             if similarity > similarity_threshold and none_subtitle_interval < 8:
                 current_subtitle.end_time = current_time
                 current_subtitle.text = ocr_text
