@@ -298,14 +298,10 @@ def delete_task(task_id: str):
     if task_id in tasks:
         video_filename = tasks[task_id].get("video_filename")
         if video_filename:
-            filename_without_ext = os.path.splitext(os.path.basename(video_filename))[0]
-            csv_path = os.path.join(UPLOAD_DIR, f"{filename_without_ext}.csv")
-            srt_path = os.path.join(UPLOAD_DIR, f"{filename_without_ext}.srt")
-            # 파일이 존재하면 삭제
-            if os.path.exists(csv_path):
-                os.remove(csv_path)
-            if os.path.exists(srt_path):
-                os.remove(srt_path)
+            video_path = os.path.join(UPLOAD_DIR, video_filename)
+            # 비디오 파일이 존재하면 삭제
+            if os.path.exists(video_path):
+                os.remove(video_path)
         del tasks[task_id]
 
 
