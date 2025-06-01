@@ -33,7 +33,7 @@ if not os.path.exists(UPLOAD_DIR):
 # 글로벌 작업 상태 저장소
 # 예: { task_id: { "video_filename": str, "status": "running"/"completed"/"failed",
 #                   "progress": 0~100, "messages": [progress update objects],
-#                   "result": srt 파일 경로, "error": str, "start_time": timestamp } }
+#                   "result": srt 파일 경로, "error": str, "task_start_time": timestamp } }
 PICKLE_FILENAME = 'tasks.pkl'
 tasks: Dict[str, Dict] = {}
 
@@ -202,7 +202,7 @@ async def start_ocr_endpoint(
         "progress": 0,
         "estimated_completion": "TDB",
         "messages": [],
-        "start_time": time.time(),
+        "task_start_time": None,
         "cancelled": False
     }
     
@@ -225,7 +225,7 @@ async def run_ocr_task(task_id, video_filename, x, y, width, height, interval, s
 
             try:
                 task["progress"] = progress
-                task["estimated_completion"] = calculate_estimated_completion(task)
+                task["estimated_completion"] = calculate_estimated_completion(task_id)
                 await broadcast_update(task)
             except Exception as e:
                 print("Progress message 처리 중 에러:", e)
@@ -314,18 +314,27 @@ async def delete_task_endpoint(task_id: str):
 # ---------------------------
 # 예상 완료 시간 계산 함수 구현
 # ---------------------------
-def calculate_estimated_completion(task: Dict) -> str:
+def calculate_estimated_completion(task_id: int) -> str:
     """
     작업 정보를 바탕으로 작업 완료까지 남은 시간을 계산하여 HH:mm:ss 단위로 반환합니다.
     진행률이 0이면 TDB 문자열을 반환합니다.
     """
+
+    task = tasks.get(task_id)
     progress = task.get("progress", 0)
-    start_time = task.get("start_time")
-    if not start_time or progress <= 0:
+    task_start_time = task.get("task_start_time")
+
+    # 첫 프레임 처리 시작 시간 기록
+    if task_start_time is None:
+        task_start_time = time.time()
+        tasks[task_id]["task_start_time"] = task_start_time
+
+    if not task_start_time or progress <= 0:
         return "TDB"
+
     elif progress == 100:
         return "00:00:00"
-    elapsed = time.time() - start_time
+    elapsed = time.time() - task_start_time
     remaining = elapsed * (100 - progress) / progress
     return time.strftime("%H:%M:%S", time.gmtime(remaining))
 
