@@ -1,6 +1,8 @@
 import os
 import csv
 import base64
+import asyncio
+from heapq import heappush, heappop
 from typing import List, Generator
 from collections import Counter
 
@@ -54,14 +56,10 @@ def format_time(seconds):
 # 동영상 파일에서 프레임을 배치 단위로 생성하는 제너레이터.
 def frame_batch_generator(
     cap: cv2.VideoCapture, 
-    x, y, width, height, interval = 0.3,
+    x, y, width, height, 
+    frame_interval,
     end_frame: int = None
 ) -> Generator[List, None, None]:
-
-    # interval 초마다 OCR 수행
-    frame_rate = cap.get(cv2.CAP_PROP_FPS)
-    frame_interval = max(1, int(round(frame_rate * interval)))  # 최소 1프레임
-
     while True:
         # 프레임 읽기
         ret, frame = cap.read()
@@ -86,6 +84,31 @@ def frame_batch_generator(
 
         yield [frame_number, img_base64]
 
+# OCR 1회 호출을 비동기 태스크로 분리
+async def ocr_one_frame(
+    client: openai.AsyncOpenAI,
+    frame_number: int,
+    img_base64: str,
+) -> tuple[int, str]:            # (frame_number, ocr_text) 반환
+    messages = [
+        {"role": "system", "content": system_prompt},
+        {"role": "user", "content": [
+            {"type": "image_url",
+                "image_url": {"url": f"data:image/png;base64,{img_base64}"}}
+        ]}
+    ]
+    completion = await client.beta.chat.completions.parse(
+        model=llm_model,
+        messages=messages,
+        response_format=OcrSubtitleGroup,
+        temperature=0,
+        max_tokens=512,
+    )
+    ocr_text = completion.choices[0].message.parsed.texts
+    if len(ocr_text) == 1 or ocr_text == "example":
+        ocr_text = ""
+    return frame_number, ocr_text
+    
 async def process_ocr(
     video_filename, 
     x, y, width, height, 
@@ -112,67 +135,75 @@ async def process_ocr(
     end_frame = int(cap.get(cv2.CAP_PROP_FRAME_COUNT)) if end_time is None else int(end_time * frame_rate) # OCR 종료 프레임
     total_frames = end_frame - start_frame # OCR 을 진행할 총 프레임 수
 
+    # interval 초마다 OCR 수행
+    frame_rate = cap.get(cv2.CAP_PROP_FPS)
+    frame_interval = max(1, int(round(frame_rate * interval)))  # 최소 1프레임
+
     # OCR 을 진행할 프레임으로 이동 
     start_ocr_frame = max(start_frame, last_frame_number)
     cap.set(cv2.CAP_PROP_POS_FRAMES, start_ocr_frame) 
 
     # ollama 클라이언트 초기화
-    client = openai.AsyncOpenAI(
-        api_key="dummy_key",
-        base_url=base_url,
-    )
+    client = openai.AsyncOpenAI(base_url=base_url, api_key="dummy_key")
 
     # CSV 파일에 OCR 결과를 저장하면 진행
     with open(csv_path, 'a', newline='', encoding='utf-8') as csvfile:
         fieldnames = ['frame_number', 'time', 'text']
         writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
 
-        for frame in frame_batch_generator(cap, x, y, width, height, interval, end_frame):
-            frame_number = frame[0]
-            img_base64 = frame[1]
+        #  결과를 순서대로 내보내기 위한 우선순위 큐
+        heap: list[tuple[int, str]] = []
+        next_frame_to_write = start_ocr_frame + 1
 
-            messages = [
-                { "role": "system", "content": system_prompt },
-                { "role": "user", 
-                    "content": [
-                        {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{img_base64}"}}
-                    ] 
-                }
-            ]
+        #  실행 중·대기 중인 태스크 집합
+        running: set[asyncio.Task] = set()
 
-            # OCR 수행
-            try:
-                completion = await client.beta.chat.completions.parse(
-                    model=llm_model,
-                    messages=messages,
-                    response_format=OcrSubtitleGroup,
-                    temperature=0,
-                    max_tokens=512,
-                )
-                ocr_text = completion.choices[0].message.parsed.texts
-            except Exception as e:
-                print("OCR 요청 중 에러 발생:")
-                print(f"Frame {frame_number}: {e}")
-                continue
-            
-            # OCR 결과가 없는 경우 처리
-            if len(ocr_text) == 1 or ocr_text == "example":
-                ocr_text = ""
+        for frame_number, img_b64 in frame_batch_generator(cap, x, y, width, height, frame_interval, end_frame):
 
-            if ocr_text:
-                print(ocr_text)
+            # 새 태스크 추가
+            task = asyncio.create_task(ocr_one_frame(client, frame_number, img_b64))
+            running.add(task)
+
+            #  태스크 수가 N를 초과하지 않도록 완료될 때까지 대기
+            if len(running) >= 3:
+                done, running = await asyncio.wait(running, return_when=asyncio.FIRST_COMPLETED)
+
+                for t in done:
+                    fn, txt = t.result()
+                    heappush(heap, (fn, txt))
                 
-            # CSV 파일에 쓰기
-            entry = {
-                'frame_number': frame_number, 
-                'time': round(frame_number / frame_rate, 3), 
-                'text': ocr_text
-            }
-            writer.writerow(entry)
+            #  heap 안에 다음 프레임이 있으면 순서대로 기록
+            while heap and heap[0][0] == next_frame_to_write:
+                fn, ocr_text = heappop(heap)
+                if ocr_text:
+                    print(ocr_text)
+                writer.writerow({
+                    "frame_number": fn,
+                    "time": round(fn / frame_rate, 3),
+                    "text": ocr_text,
+                })
+                next_frame_to_write += frame_interval     # 혹은 frame_interval 간격만큼 증가
+                percentage = round((fn - start_frame) / total_frames * 100, 2)
+                yield percentage
+            csvfile.flush()
+        
+        # 남아 있는 태스크 모두 완료
+        for t in asyncio.as_completed(running):
+            fn, txt = await t
+            heappush(heap, (fn, txt))
 
-            # 진행 상황 업데이트
-            percentage = round((frame_number - start_frame) / total_frames * 100, 2)
-            yield percentage
+        # heap 잔여 결과 정리
+        while heap:
+            fn, ocr_text = heappop(heap)
+            writer.writerow({
+                "frame_number": fn,
+                "time": round(fn / frame_rate, 3),
+                "text": ocr_text,
+            })
+        csvfile.flush()
+        
+        # 진행 상황 업데이트
+        yield 100
 
     # OCR 완료된 CSV 파일 읽기기
     ocr_text_data = []
