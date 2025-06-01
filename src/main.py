@@ -296,6 +296,12 @@ def delete_task(task_id: str):
     - 관련 파일(CSV, SRT)이 존재하면 삭제
     """
     if task_id in tasks:
+        video_filename = tasks[task_id].get("video_filename")
+        if video_filename:
+            video_path = os.path.join(UPLOAD_DIR, video_filename)
+            # 비디오 파일이 존재하면 삭제
+            if os.path.exists(video_path):
+                os.remove(video_path)
         del tasks[task_id]
 
 
