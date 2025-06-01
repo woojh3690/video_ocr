@@ -225,7 +225,7 @@ async def process_ocr(
                 langs.append(lang_detected)
             except LangDetectException:
                 pass
-        if len(langs) >= 10:
+        if len(langs) >= 100:
             break
     most_common_lang = Counter(langs).most_common(1)[0][0] if langs else "un"
     srt_path = os.path.join(UPLOAD_DIR, f"{filename_without_ext}.{most_common_lang}.srt")
