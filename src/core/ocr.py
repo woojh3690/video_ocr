@@ -215,7 +215,7 @@ async def process_ocr(
         # 진행 상황 업데이트
         yield 100
 
-    # OCR 완료된 CSV 파일 읽기기
+    # OCR 완료된 CSV 파일 읽기
     ocr_text_data = []
     with open(csv_path, 'r', encoding='utf-8') as csvfile:
         for row in csv.DictReader(csvfile):
