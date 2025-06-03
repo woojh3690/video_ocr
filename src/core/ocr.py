@@ -1,5 +1,6 @@
 import os
 import csv
+import json
 import base64
 import asyncio
 from heapq import heappush, heappop
@@ -8,7 +9,7 @@ from collections import Counter
 
 import cv2
 import openai
-from pydantic import BaseModel
+from pydantic import BaseModel, ValidationError
 from langdetect import detect
 from langdetect.lang_detect_exception import LangDetectException
 
@@ -97,15 +98,24 @@ async def ocr_one_frame(
                 "image_url": {"url": f"data:image/png;base64,{img_base64}"}}
         ]}
     ]
-    completion = await client.beta.chat.completions.parse(
-        model=llm_model,
-        messages=messages,
-        response_format=OcrSubtitleGroup,
-        temperature=0,
-        max_tokens=512,
-    )
-    ocr_text = completion.choices[0].message.parsed.texts
-    if len(ocr_text) == 1 or ocr_text == "example":
+    try:
+        completion = await client.beta.chat.completions.parse(
+            model=llm_model,
+            messages=messages,
+            response_format=OcrSubtitleGroup,
+            temperature=0,
+            max_tokens=512,
+        )
+        ocr_text = completion.choices[0].message.parsed.texts
+        if len(ocr_text) == 1 or ocr_text == "example":
+            ocr_text = ""
+    except (ValidationError, json.JSONDecodeError) as e:
+        # 예외가 발생해도 그냥 빈 문자열로 치환하고 로그만 남긴다
+        print(f"[Warn] 프레임 {frame_number} OCR 중 예외 발생: {e!r}")
+        ocr_text = ""
+    except Exception as e:
+        # 혹시 다른 예외도 잡고 싶으면 여기에 추가
+        print(f"[Error] 예기치 못한 오류 (frame {frame_number}): {e!r}")
         ocr_text = ""
     return frame_number, ocr_text
     
