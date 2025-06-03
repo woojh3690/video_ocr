@@ -65,7 +65,7 @@ function updateTaskRow(task) {
     let taskId = task.task_id;
     let progress = task.progress || 0;
     let status = task.status || "";
-    let estimated = (typeof task.estimated_completion !== "undefined") ? task.estimated_completion : "TDB";
+    let estimated = (typeof task.estimated_completion !== "undefined") ? task.estimated_completion : "TBD";
     let videoFile = task.video_filename || "";
 
     // 기존 row 검색
