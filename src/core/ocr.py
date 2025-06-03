@@ -71,7 +71,7 @@ def frame_batch_generator(
             cap.release()
             break
         
-        # frame_interval 초마다 OCR 수행
+        # frame_interval 프레임 마다 OCR 수행
         if frame_number % frame_interval != 0:
             continue
 
