@@ -65,7 +65,7 @@ function updateTaskRow(task) {
     let taskId = task.task_id;
     let progress = task.progress || 0;
     let status = task.status || "";
-    let estimated = (typeof task.estimated_completion !== "undefined") ? task.estimated_completion : "TDB";
+    let estimated = (typeof task.estimated_completion !== "undefined") ? task.estimated_completion : "TBD";
     let videoFile = task.video_filename || "";
 
     // 기존 row 검색
@@ -306,9 +306,15 @@ intervalInput.addEventListener("input", (event) => {
 
 const frameBasedOCRCheckbox = document.getElementById('frameBasedOCR');
 frameBasedOCRCheckbox.addEventListener('change', function() {
-    // 체크박스가 선택되면 숫자 입력 필드를 비활성화, 아니면 활성화합니다.
-    intervalInput.disabled = this.checked;
-    intervalValue = -1;
+    if (this.checked) {
+        // 체크되면 입력 필드를 비활성화하고 intervalValue를 -1로 설정
+        intervalInput.disabled = true;
+        intervalValue = -1;
+    } else {
+        // 체크 해제 시 입력 필드 활성화 후 현재 값을 intervalValue로 사용
+        intervalInput.disabled = false;
+        intervalValue = parseFloat(intervalInput.value);
+    }
 });
 
 // mm:ss 형식의 문자열을 초 단위로 변환하는 함수 (예: "02:30" -> 150초)
