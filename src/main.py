@@ -20,13 +20,12 @@ from fastapi.templating import Jinja2Templates
 import aiofiles
 import cv2
 
-from core.ocr import process_ocr
+from core.ocr import process_ocr, UPLOAD_DIR
 
 
 app = FastAPI()
 
 # 업로드된 비디오 파일 저장 경로
-UPLOAD_DIR = "uploads"
 if not os.path.exists(UPLOAD_DIR):
     os.makedirs(UPLOAD_DIR)
 
@@ -34,7 +33,7 @@ if not os.path.exists(UPLOAD_DIR):
 # 예: { task_id: { "video_filename": str, "status": "running"/"completed"/"failed",
 #                   "progress": 0~100, "messages": [progress update objects],
 #                   "result": srt 파일 경로, "error": str, "task_start_time": timestamp } }
-PICKLE_FILENAME = 'tasks.pkl'
+PICKLE_FILENAME = os.path.join(UPLOAD_DIR, 'tasks.pkl')
 tasks: Dict[str, Dict] = {}
 
 # 클라이언트 WebSocket 연결 (클라이언트당 하나의 WebSocket)

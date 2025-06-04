@@ -15,6 +15,8 @@ from langdetect.lang_detect_exception import LangDetectException
 
 from core.merging_module import merge_ocr_texts  # 모듈 임포트
 
+UPLOAD_DIR = "uploads"
+
 base_url: str | None = os.getenv("LLM_BASE_URL")
 llm_model: str = os.getenv("LLM_MODEL", "Qwen/Qwen2.5-VL-3B-Instruct")
 
