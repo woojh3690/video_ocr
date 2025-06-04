@@ -205,6 +205,9 @@ async def start_ocr_endpoint(
         "task_start_time": None,
         "cancelled": False
     }
+
+    # 생성된 작업을 즉시 브로드캐스트하여 클라이언트에 표시
+    await broadcast_update(tasks[task_id])
     
     # 백그라운드에서 OCR 작업 실행
     asyncio.create_task(
@@ -229,6 +232,7 @@ async def run_ocr_task(task_id, video_filename, x, y, width, height, interval, s
                 await broadcast_update(task)
             except Exception as e:
                 print("Progress message 처리 중 에러:", e)
+        
         # OCR 작업 정상 완료 시
         task["status"] = "completed"
         filename_without_ext = os.path.splitext(os.path.basename(video_filename))[0]
