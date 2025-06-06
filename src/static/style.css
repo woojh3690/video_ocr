@@ -108,3 +108,24 @@ input[type="number"] {
 .file-area:hover .file-dummy {
     border: 2px dashed #1abc9c;
 }
+
+body {
+    background-color: #ffffff;
+    color: #000;
+}
+
+@media (prefers-color-scheme: dark) {
+    body {
+        background-color: #121212;
+        color: #e1e1e1;
+    }
+
+    .table {
+        color: #e1e1e1;
+    }
+
+    .file-area .file-dummy {
+        background-color: #333;
+        border-color: #666;
+    }
+}
