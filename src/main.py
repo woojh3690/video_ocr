@@ -202,7 +202,14 @@ async def start_ocr_endpoint(
         "estimated_completion": "TBD",
         "messages": [],
         "task_start_time": None,
-        "cancelled": False
+        "cancelled": False,
+        "ocr_x": x,
+        "ocr_y": y,
+        "ocr_width": width,
+        "ocr_height": height,
+        "interval": interval_value,
+        "ocr_start_time": start_time,
+        "ocr_end_time": end_time
     }
 
     # 생성된 작업을 즉시 브로드캐스트하여 클라이언트에 표시
@@ -255,6 +262,37 @@ async def cancel_ocr(task_id: str = Form(...)):
         return {"detail": f"Task {task_id} 취소 요청이 접수되었습니다."}
     else:
         raise HTTPException(status_code=404, detail="Task not found")
+
+
+@app.post("/resume_ocr/")
+async def resume_ocr(task_id: str = Form(...)):
+    if task_id not in tasks:
+        raise HTTPException(status_code=404, detail="Task not found")
+
+    task = tasks[task_id]
+    if task.get("status") != "cancelled":
+        raise HTTPException(status_code=400, detail="Task is not cancelled")
+
+    task["cancelled"] = False
+    task["status"] = "running"
+    task["task_start_time"] = None
+
+    await broadcast_update(task)
+
+    asyncio.create_task(
+        run_ocr_task(
+            task_id,
+            task["video_filename"],
+            task["ocr_x"],
+            task["ocr_y"],
+            task["ocr_width"],
+            task["ocr_height"],
+            task["interval"],
+            task["ocr_start_time"],
+            task["ocr_end_time"],
+        )
+    )
+    return {"detail": f"Task {task_id} resumed"}
     
 
 async def broadcast_update(message: dict):
