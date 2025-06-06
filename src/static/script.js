@@ -60,6 +60,47 @@ fetch('/tasks/')
 
 // --- 함수 정의 ---
 
+// 작업 제어 버튼을 상태에 맞게 설정
+function setActionButtons(row, status, taskId) {
+    const cell = row.querySelector('.action-cell');
+    cell.innerHTML = '';
+
+    if (status === 'running') {
+        const cancelBtn = document.createElement('button');
+        cancelBtn.className = 'btn btn-warning btn-sm cancel-btn';
+        cancelBtn.innerText = '중지';
+        cancelBtn.onclick = function() {
+            cancelTask(taskId);
+        };
+        cell.appendChild(cancelBtn);
+    } else if (status === 'cancelled' || status === 'cancelling') {
+        const resumeBtn = document.createElement('button');
+        resumeBtn.className = 'btn btn-primary btn-sm resume-btn mr-1';
+        resumeBtn.innerText = '재개';
+        resumeBtn.onclick = function() {
+            resumeTask(taskId);
+        };
+
+        const deleteBtn = document.createElement('button');
+        deleteBtn.className = 'btn btn-danger btn-sm delete-btn';
+        deleteBtn.innerText = '삭제';
+        deleteBtn.onclick = function() {
+            deleteTask(taskId);
+        };
+
+        cell.appendChild(resumeBtn);
+        cell.appendChild(deleteBtn);
+    } else {
+        const deleteBtn = document.createElement('button');
+        deleteBtn.className = 'btn btn-danger btn-sm delete-btn';
+        deleteBtn.innerText = '삭제';
+        deleteBtn.onclick = function() {
+            deleteTask(taskId);
+        };
+        cell.appendChild(deleteBtn);
+    }
+}
+
 // 작업 목록 테이블의 row 업데이트 (존재하면 수정, 없으면 생성)
 function updateTaskRow(task) {
     let taskId = task.task_id;
@@ -84,25 +125,10 @@ function updateTaskRow(task) {
             </td>
             <td class="status-cell">${status}</td>
             <td class="estimated-cell">${estimated}</td>
-            <td class="action-cell">
-                <button class="${status === 'running' ? 'btn btn-warning btn-sm cancel-btn' : 'btn btn-danger btn-sm delete-btn'}" data-task-id="${taskId}">
-                    ${status === 'running' ? '중지' : '삭제'}
-                </button>
-            </td>
+            <td class="action-cell"></td>
         `;
         taskListTableBody.appendChild(row);
-
-        // 버튼 이벤트 등록
-        let btn = row.querySelector("button");
-        if (status === 'running') {
-            btn.onclick = function() {
-                cancelTask(taskId);
-            };
-        } else {
-            btn.onclick = function() {
-                deleteTask(taskId);
-            };
-        }
+        setActionButtons(row, status, taskId);
     } else {
         // 기존 row가 있으면 변경된 부분만 업데이트
         row.querySelector('.video-file').innerText = videoFile;
@@ -114,16 +140,8 @@ function updateTaskRow(task) {
         row.querySelector('.status-cell').innerText = status;
         row.querySelector('.estimated-cell').innerText = estimated;
 
-        // 실행 상태가 아닐 경우 삭제 버튼으로 업데이트
-        let btn = row.querySelector('.action-cell button');
-        if (status !== 'running') {
-            btn.className = 'btn btn-danger btn-sm delete-btn';
-            btn.innerText = '삭제';
-            btn.setAttribute('data-task-id', taskId);
-            btn.onclick = function() {
-                deleteTask(taskId);
-            };
-        }
+        // 버튼 업데이트
+        setActionButtons(row, status, taskId);
     }
 
     // OCR 작업이 완료된 경우 자막 다운로드 링크 추가
@@ -141,6 +159,21 @@ function cancelTask(taskId) {
     let formData = new FormData();
     formData.append('task_id', taskId);
     fetch(`/cancel_ocr/`, {
+        method: 'POST',
+        body: formData
+    })
+    .then(response => response.json())
+    .then(data => {
+        console.log(data.detail);
+    })
+    .catch(err => console.error(err));
+}
+
+// RESUME 요청을 보내고 작업 재시작
+function resumeTask(taskId) {
+    let formData = new FormData();
+    formData.append('task_id', taskId);
+    fetch(`/resume_ocr/`, {
         method: 'POST',
         body: formData
     })
