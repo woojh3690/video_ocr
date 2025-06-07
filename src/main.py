@@ -202,7 +202,6 @@ async def start_ocr_endpoint(
         "estimated_completion": "TBD",
         "messages": [],
         "task_start_time": None,
-        "cancelled": False,
         "ocr_x": x,
         "ocr_y": y,
         "ocr_width": width,
@@ -227,7 +226,7 @@ async def run_ocr_task(task_id, video_filename, x, y, width, height, interval, s
     try:
         async for progress in process_ocr(video_filename, x, y, width, height, interval, start_time, end_time):
             # 취소 요청이 들어왔는지 확인
-            if task.get("cancelled"):
+            if task.get("status") == "cancelling":
                 task["status"] = "cancelled"
                 await broadcast_update(task)
                 return  # 작업 중지
@@ -256,7 +255,6 @@ async def run_ocr_task(task_id, video_filename, x, y, width, height, interval, s
 @app.post("/cancel_ocr/")
 async def cancel_ocr(task_id: str = Form(...)):
     if task_id in tasks:
-        tasks[task_id]["cancelled"] = True
         tasks[task_id]["status"] = "cancelling"
         await broadcast_update(tasks[task_id])
         return {"detail": f"Task {task_id} 취소 요청이 접수되었습니다."}
@@ -273,11 +271,8 @@ async def resume_ocr(task_id: str = Form(...)):
     if task.get("status") != "cancelled":
         raise HTTPException(status_code=400, detail="Task is not cancelled")
 
-    task["cancelled"] = False
     task["status"] = "running"
     task["task_start_time"] = None
-
-    await broadcast_update(task)
 
     asyncio.create_task(
         run_ocr_task(
@@ -292,6 +287,8 @@ async def resume_ocr(task_id: str = Form(...)):
             task["ocr_end_time"],
         )
     )
+
+    await broadcast_update(task)
     return {"detail": f"Task {task_id} resumed"}
     
 
