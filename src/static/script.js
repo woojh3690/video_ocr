@@ -106,6 +106,15 @@ function updateTaskRow(task) {
     let taskId = task.task_id;
     let progress = task.progress || 0;
     let status = task.status || "";
+    let statusHtml;
+    if (status === 'completed') {
+        statusHtml = `<span class="download-subtitles" style="cursor:pointer; color: blue; text-decoration: underline;">${status}</span>`;
+    } else {
+        statusHtml = status;
+        if (task.error) {
+            statusHtml += `: ${task.error}`;
+        }
+    }
     let estimated = (typeof task.estimated_completion !== "undefined") ? task.estimated_completion : "TBD";
     let videoFile = task.video_filename || "";
 
@@ -123,34 +132,35 @@ function updateTaskRow(task) {
                     <div class="progress-bar" role="progressbar" style="width: ${progress}%;" aria-valuenow="${progress}" aria-valuemin="0" aria-valuemax="100"></div>
                 </div>
             </td>
-            <td class="status-cell">${status}</td>
+            <td class="status-cell">${statusHtml}</td>
             <td class="estimated-cell">${estimated}</td>
             <td class="action-cell"></td>
         `;
         taskListTableBody.appendChild(row);
         setActionButtons(row, status, taskId);
+        if (status === 'completed') {
+            row.querySelector('.download-subtitles').onclick = function() {
+                window.location.href = `/download_srt/${videoFile}`;
+            };
+        }
     } else {
         // 기존 row가 있으면 변경된 부분만 업데이트
         row.querySelector('.video-file').innerText = videoFile;
-        
+
         let progressBar = row.querySelector('.progress-bar');
         progressBar.style.width = `${progress}%`;
         progressBar.setAttribute('aria-valuenow', progress);
-        
-        row.querySelector('.status-cell').innerText = status;
+
+        row.querySelector('.status-cell').innerHTML = statusHtml;
         row.querySelector('.estimated-cell').innerText = estimated;
 
         // 버튼 업데이트
         setActionButtons(row, status, taskId);
-    }
-
-    // OCR 작업이 완료된 경우 자막 다운로드 링크 추가
-    if (status === 'completed') {
-        let statusCell = row.querySelector('.status-cell');
-        statusCell.innerHTML = `<span class="download-subtitles" style="cursor:pointer; color: blue; text-decoration: underline;">${status}</span>`;
-        statusCell.querySelector('.download-subtitles').onclick = function() {
-            window.location.href = `/download_srt/${videoFile}`;
-        };
+        if (status === 'completed') {
+            row.querySelector('.download-subtitles').onclick = function() {
+                window.location.href = `/download_srt/${videoFile}`;
+            };
+        }
     }
 }
 
