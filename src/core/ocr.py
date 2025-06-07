@@ -159,6 +159,12 @@ async def process_ocr(
     # ollama 클라이언트 초기화
     client = openai.AsyncOpenAI(base_url=base_url, api_key="dummy_key")
 
+    # vllm 서버가 실행 중인지 확인
+    try:
+        await client.models.list()
+    except openai.APIConnectionError:
+        raise RuntimeError("vllm 서버가 실행 중인지 확인해주세요.")
+
     # CSV 파일에 OCR 결과를 저장하면 진행
     with open(csv_path, 'a', newline='', encoding='utf-8') as csvfile:
         fieldnames = ['frame_number', 'time', 'text']
