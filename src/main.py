@@ -10,6 +10,7 @@ import pickle
 import atexit
 import signal
 import traceback
+from enum import Enum
 from typing import Dict, List
 from typing import Optional
 
@@ -23,6 +24,13 @@ import cv2
 from core.ocr import process_ocr, UPLOAD_DIR
 
 
+class Status(str, Enum):
+    running = "running"
+    completed = "completed"
+    failed = "failed"
+    cancelling = "cancelling"
+    cancelled = "cancelled"
+
 app = FastAPI()
 
 # 업로드된 비디오 파일 저장 경로
@@ -30,7 +38,7 @@ if not os.path.exists(UPLOAD_DIR):
     os.makedirs(UPLOAD_DIR)
 
 # 글로벌 작업 상태 저장소
-# 예: { task_id: { "video_filename": str, "status": "running"/"completed"/"failed",
+# 예: { task_id: { "video_filename": str, "status": Status,
 #                   "progress": 0~100, "messages": [progress update objects],
 #                   "result": srt 파일 경로, "error": str, "task_start_time": timestamp } }
 PICKLE_FILENAME = os.path.join(UPLOAD_DIR, 'tasks.pkl')
@@ -51,6 +59,11 @@ def load_tasks():
             tasks = {}
     else:
         tasks = {}
+    
+    # 로드된 테스크 정보에서 running or cancelling 상태를 cancelled 로 변경
+    for inner in tasks.values():
+        if inner["status"] == Status.running or inner["status"] == Status.cancelling:
+            inner["status"] = Status.cancelled  
 
 def save_tasks():
     try:
@@ -68,8 +81,8 @@ def handle_termination(signum, frame):
     save_tasks()
     sys.exit(0)
 
-signal.signal(signal.SIGTERM, handle_termination)
-signal.signal(signal.SIGINT, handle_termination)
+for sig in (signal.SIGINT, signal.SIGTERM):
+    signal.signal(sig, handle_termination)
 
 # 프로그램 시작 시 tasks 로드
 load_tasks()
@@ -197,7 +210,7 @@ async def start_ocr_endpoint(
     tasks[task_id] = {
         "task_id": task_id,
         "video_filename": video_filename,
-        "status": "running",
+        "status": Status.running,
         "progress": 0,
         "estimated_completion": "TBD",
         "messages": [],
@@ -226,8 +239,8 @@ async def run_ocr_task(task_id, video_filename, x, y, width, height, interval, s
     try:
         async for progress in process_ocr(video_filename, x, y, width, height, interval, start_time, end_time):
             # 취소 요청이 들어왔는지 확인
-            if task.get("status") == "cancelling":
-                task["status"] = "cancelled"
+            if task.get("status") == Status.cancelling:
+                task["status"] = Status.cancelled
                 await broadcast_update(task)
                 return  # 작업 중지
 
@@ -239,13 +252,13 @@ async def run_ocr_task(task_id, video_filename, x, y, width, height, interval, s
                 print("Progress message 처리 중 에러:", e)
         
         # OCR 작업 정상 완료 시
-        task["status"] = "completed"
+        task["status"] = Status.completed
         filename_without_ext = os.path.splitext(os.path.basename(video_filename))[0]
         srt_path = os.path.join(UPLOAD_DIR, f"{filename_without_ext}.srt")
         task["result"] = srt_path if os.path.exists(srt_path) else None
         await broadcast_update(task)
     except Exception as e:
-        task["status"] = "failed"
+        task["status"] = Status.failed
         task["error"] = str(e)
         print("OCR 작업 중 에러:", e)
         traceback.print_exc()
@@ -255,7 +268,7 @@ async def run_ocr_task(task_id, video_filename, x, y, width, height, interval, s
 @app.post("/cancel_ocr/")
 async def cancel_ocr(task_id: str = Form(...)):
     if task_id in tasks:
-        tasks[task_id]["status"] = "cancelling"
+        tasks[task_id]["status"] = Status.cancelling
         await broadcast_update(tasks[task_id])
         return {"detail": f"Task {task_id} 취소 요청이 접수되었습니다."}
     else:
@@ -268,7 +281,7 @@ async def resume_ocr(task_id: str = Form(...)):
         raise HTTPException(status_code=404, detail="Task not found")
 
     task = tasks[task_id]
-    if task.get("status") != "cancelled":
+    if task.get("status") != Status.cancelled:
         raise HTTPException(status_code=400, detail="Task is not cancelled")
 
     task["status"] = "running"
