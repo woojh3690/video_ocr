@@ -65,7 +65,7 @@ function setActionButtons(row, status, taskId) {
     const cell = row.querySelector('.action-cell');
     cell.innerHTML = '';
 
-    if (status === 'running') {
+    if (status === 'running' || status === 'waiting') {
         const cancelBtn = document.createElement('button');
         cancelBtn.className = 'btn btn-warning btn-sm cancel-btn';
         cancelBtn.innerText = '중지';
@@ -110,7 +110,7 @@ function updateTaskRow(task) {
     if (status === 'completed') {
         statusHtml = `<span class="download-subtitles" style="cursor:pointer; color: blue; text-decoration: underline;">${status}</span>`;
     } else {
-        statusHtml = status;
+        statusHtml = (status === 'waiting') ? '대기' : status;
         if (task.error) {
             statusHtml += `: ${task.error}`;
         }

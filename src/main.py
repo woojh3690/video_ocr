@@ -11,8 +11,8 @@ import atexit
 import signal
 import traceback
 from enum import Enum
-from typing import Dict, List
-from typing import Optional
+from dataclasses import dataclass, field, asdict, is_dataclass
+from typing import Dict, List, Optional
 
 from fastapi import FastAPI, UploadFile, File, Form, HTTPException, Request, WebSocket, WebSocketDisconnect
 from fastapi.responses import HTMLResponse, StreamingResponse, FileResponse
@@ -25,11 +25,32 @@ from core.ocr import process_ocr, UPLOAD_DIR
 
 
 class Status(str, Enum):
+    waiting = "waiting"
     running = "running"
     completed = "completed"
     failed = "failed"
     cancelling = "cancelling"
     cancelled = "cancelled"
+
+
+@dataclass
+class Task:
+    task_id: str
+    video_filename: str
+    status: Status
+    progress: int = 0
+    estimated_completion: str = "TBD"
+    messages: List[dict] = field(default_factory=list)
+    task_start_time: Optional[float] = None
+    ocr_x: int = 0
+    ocr_y: int = 0
+    ocr_width: int = 0
+    ocr_height: int = 0
+    interval: float = 0.0
+    ocr_start_time: Optional[int] = 0
+    ocr_end_time: Optional[int] = None
+    result: Optional[str] = None
+    error: Optional[str] = None
 
 app = FastAPI()
 
@@ -42,7 +63,24 @@ if not os.path.exists(UPLOAD_DIR):
 #                   "progress": 0~100, "messages": [progress update objects],
 #                   "result": srt 파일 경로, "error": str, "task_start_time": timestamp } }
 PICKLE_FILENAME = os.path.join(UPLOAD_DIR, 'tasks.pkl')
-tasks: Dict[str, Dict] = {}
+tasks: Dict[str, Task] = {}
+
+
+def get_running_task_id() -> Optional[str]:
+    """현재 실행 중인 작업의 ID를 반환합니다."""
+    for tid, t in tasks.items():
+        if t.status == Status.running:
+            return tid
+    return None
+
+
+def get_next_waiting_task_id() -> Optional[str]:
+    """대기 중인 다음 작업의 ID를 반환합니다."""
+    for tid, t in tasks.items():
+        if t.status == Status.waiting:
+            return tid
+    return None
+
 
 # 클라이언트 WebSocket 연결 (클라이언트당 하나의 WebSocket)
 global_websocket_connections: List[WebSocket] = []
@@ -52,7 +90,11 @@ def load_tasks():
     if os.path.exists(PICKLE_FILENAME):
         try:
             with open(PICKLE_FILENAME, 'rb') as f:
-                tasks = pickle.load(f)
+                loaded = pickle.load(f)
+                if isinstance(loaded, dict):
+                    tasks = {tid: (Task(**data) if not isinstance(data, Task) else data) for tid, data in loaded.items()}
+                else:
+                    tasks = {}
             print(f"{PICKLE_FILENAME}에서 tasks 로드 성공")
         except Exception as e:
             print("tasks 로드 중 오류 발생:", e)
@@ -60,10 +102,10 @@ def load_tasks():
     else:
         tasks = {}
     
-    # 로드된 테스크 정보에서 running or cancelling 상태를 cancelled 로 변경
-    for inner in tasks.values():
-        if inner["status"] == Status.running or inner["status"] == Status.cancelling:
-            inner["status"] = Status.cancelled  
+    # 로드된 테스크 정보에서 실행 중이던 상태를 모두 cancelled 로 변경
+    for t in tasks.values():
+        if t.status in (Status.running, Status.cancelling, Status.waiting):
+            t.status = Status.cancelled
 
 def save_tasks():
     try:
@@ -207,69 +249,102 @@ async def start_ocr_endpoint(
     
     # 작업(task) 생성
     task_id = str(uuid.uuid4())
-    tasks[task_id] = {
-        "task_id": task_id,
-        "video_filename": video_filename,
-        "status": Status.running,
-        "progress": 0,
-        "estimated_completion": "TBD",
-        "messages": [],
-        "task_start_time": None,
-        "ocr_x": x,
-        "ocr_y": y,
-        "ocr_width": width,
-        "ocr_height": height,
-        "interval": interval_value,
-        "ocr_start_time": start_time,
-        "ocr_end_time": end_time
-    }
+    tasks[task_id] = Task(
+        task_id=task_id,
+        video_filename=video_filename,
+        status=Status.waiting,
+        progress=0,
+        estimated_completion="TBD",
+        messages=[],
+        task_start_time=None,
+        ocr_x=x,
+        ocr_y=y,
+        ocr_width=width,
+        ocr_height=height,
+        interval=interval_value,
+        ocr_start_time=start_time,
+        ocr_end_time=end_time,
+    )
 
     # 생성된 작업을 즉시 브로드캐스트하여 클라이언트에 표시
     await broadcast_update(tasks[task_id])
+
+    # 대기 중인 작업이 하나뿐이고 실행 중인 작업이 없다면 바로 실행
+    await start_next_task()
     
-    # 백그라운드에서 OCR 작업 실행
-    asyncio.create_task(
-        run_ocr_task(task_id, video_filename, x, y, width, height, interval_value, start_time, end_time)
-    )
     return {"task_id": task_id}
 
 async def run_ocr_task(task_id, video_filename, x, y, width, height, interval, start_time, end_time):
     print(f"[시작] {task_id} - {video_filename}")
     task = tasks[task_id]
+    task.status = Status.running
+    task.task_start_time = None
+    await broadcast_update(task)
     try:
         async for progress in process_ocr(video_filename, x, y, width, height, interval, start_time, end_time):
             # 취소 요청이 들어왔는지 확인
-            if task.get("status") == Status.cancelling:
-                task["status"] = Status.cancelled
+            if task.status == Status.cancelling:
+                task.status = Status.cancelled
                 await broadcast_update(task)
                 return  # 작업 중지
 
             try:
-                task["progress"] = progress
-                task["estimated_completion"] = calculate_estimated_completion(task_id)
+                task.progress = progress
+                task.estimated_completion = calculate_estimated_completion(task_id)
                 await broadcast_update(task)
             except Exception as e:
                 print("Progress message 처리 중 에러:", e)
-        
+
         # OCR 작업 정상 완료 시
-        task["status"] = Status.completed
+        task.status = Status.completed
         filename_without_ext = os.path.splitext(os.path.basename(video_filename))[0]
         srt_path = os.path.join(UPLOAD_DIR, f"{filename_without_ext}.srt")
-        task["result"] = srt_path if os.path.exists(srt_path) else None
+        task.result = srt_path if os.path.exists(srt_path) else None
         await broadcast_update(task)
     except Exception as e:
-        task["status"] = Status.failed
-        task["error"] = str(e)
+        task.status = Status.failed
+        task.error = str(e)
         print("OCR 작업 중 에러:", e)
         traceback.print_exc()
         await broadcast_update(task)
+    finally:
+        # 작업 종료 후 다음 작업 실행
+        await start_next_task()
+
+async def start_next_task():
+    """대기 상태인 다음 작업이 있으면 실행합니다."""
+    if get_running_task_id() is not None:
+        return
+    next_id = get_next_waiting_task_id()
+    if not next_id:
+        return
+    next_task = tasks[next_id]
+    asyncio.create_task(
+        run_ocr_task(
+            next_id,
+            next_task.video_filename,
+            next_task.ocr_x,
+            next_task.ocr_y,
+            next_task.ocr_width,
+            next_task.ocr_height,
+            next_task.interval,
+            next_task.ocr_start_time,
+            next_task.ocr_end_time,
+        )
+    )
 
 
 @app.post("/cancel_ocr/")
 async def cancel_ocr(task_id: str = Form(...)):
     if task_id in tasks:
-        tasks[task_id]["status"] = Status.cancelling
-        await broadcast_update(tasks[task_id])
+        task = tasks[task_id]
+        if task.status == Status.waiting:
+            task.status = Status.cancelled
+            await broadcast_update(task)
+            await start_next_task()
+            return {"detail": f"Task {task_id} 취소되었습니다."}
+        task.status = Status.cancelling
+        await broadcast_update(task)
         return {"detail": f"Task {task_id} 취소 요청이 접수되었습니다."}
     else:
         raise HTTPException(status_code=404, detail="Task not found")
@@ -281,35 +356,23 @@ async def resume_ocr(task_id: str = Form(...)):
         raise HTTPException(status_code=404, detail="Task not found")
 
     task = tasks[task_id]
-    if task.get("status") != Status.cancelled:
+    if task.status != Status.cancelled:
         raise HTTPException(status_code=400, detail="Task is not cancelled")
-
-    task["status"] = "running"
-    task["task_start_time"] = None
-
-    asyncio.create_task(
-        run_ocr_task(
-            task_id,
-            task["video_filename"],
-            task["ocr_x"],
-            task["ocr_y"],
-            task["ocr_width"],
-            task["ocr_height"],
-            task["interval"],
-            task["ocr_start_time"],
-            task["ocr_end_time"],
-        )
-    )
-
+    task.status = Status.waiting
+    task.task_start_time = None
     await broadcast_update(task)
+    await start_next_task()
     return {"detail": f"Task {task_id} resumed"}
     
 
-async def broadcast_update(message: dict):
+async def broadcast_update(message):
     """
     모든 연결된 클라이언트 WebSocket에 message(JSON)를 전송합니다.
     전송에 실패한 경우 해당 WebSocket은 리스트에서 제거합니다.
     """
+    if is_dataclass(message):
+        message = asdict(message)
+
     to_remove = []
     for ws in global_websocket_connections:
         try:
@@ -327,14 +390,14 @@ async def broadcast_update(message: dict):
 # ---------------------------
 @app.get("/tasks/")
 async def get_tasks():
-    return tasks
+    return {tid: asdict(task) for tid, task in tasks.items()}
 
 
 @app.get("/tasks/{task_id}")
 async def get_task(task_id: str):
     if task_id not in tasks:
         raise HTTPException(status_code=404, detail="Task not found")
-    return tasks[task_id]
+    return asdict(tasks[task_id])
 
 
 # ---------------------------
@@ -347,7 +410,7 @@ def delete_task(task_id: str):
     - 관련 파일(CSV, SRT)이 존재하면 삭제
     """
     if task_id in tasks:
-        video_filename = tasks[task_id].get("video_filename")
+        video_filename = tasks[task_id].video_filename
         if video_filename:
             video_path = os.path.join(UPLOAD_DIR, video_filename)
             # 비디오 파일이 존재하면 삭제
@@ -372,13 +435,14 @@ def calculate_estimated_completion(task_id: int) -> str:
     """
 
     task = tasks.get(task_id)
-    progress = task.get("progress", 0)
-    task_start_time = task.get("task_start_time")
+    progress = task.progress if task else 0
+    task_start_time = task.task_start_time if task else None
 
     # 첫 프레임 처리 시작 시간 기록
     if task_start_time is None:
         task_start_time = time.time()
-        tasks[task_id]["task_start_time"] = task_start_time
+        if task:
+            task.task_start_time = task_start_time
 
     if not task_start_time or progress <= 0:
         return "TBD"
