@@ -4,7 +4,6 @@ websockets
 Jinja2
 python-multipart
 aiofiles
-opencv-python
 openai
 thefuzz
 langdetect
