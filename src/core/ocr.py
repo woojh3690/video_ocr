@@ -14,7 +14,7 @@ from langdetect import detect
 from langdetect.lang_detect_exception import LangDetectException
 import random
 
-from core.merging_module import merge_ocr_texts  # 모듈 임포트
+from core.merging_module import normalize_text, merge_ocr_texts
 
 UPLOAD_DIR = "uploads"
 
@@ -194,6 +194,7 @@ async def process_ocr(
             #  heap 안에 다음 프레임이 있으면 순서대로 기록
             while heap and heap[0][0] == next_frame_to_write:
                 fn, ocr_text = heappop(heap)
+                ocr_text = normalize_text(ocr_text)  # 불필요한 대괄호 제거
                 if ocr_text:
                     print(ocr_text)
                 writer.writerow({
