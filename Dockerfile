@@ -15,6 +15,9 @@ RUN apt-get update && \
         libsm6 libxext6 && \
     rm -rf /var/lib/apt/lists/*
 
+# python3-opencv 설치 경로 추가
+ENV PYTHONPATH=/usr/lib/python3/dist-packages:$PYTHONPATH
+
 COPY requirements.txt ./ 
 RUN pip install --no-cache-dir -r requirements.txt
 
