@@ -50,7 +50,7 @@ def get_init_subtitle(current_time, ocr_text) -> Subtitle:
         history= [ocr_text]
     )
 
-def merge_ocr_texts(ocr_text_data, similarity_threshold=60) -> list[Subtitle]:
+def merge_ocr_texts(ocr_text_data, similarity_threshold=70) -> list[Subtitle]:
     ocr_progress_data: list[Subtitle] = []
     current_subtitle: Subtitle = None
 
@@ -68,7 +68,7 @@ def merge_ocr_texts(ocr_text_data, similarity_threshold=60) -> list[Subtitle]:
             current_subtitle = get_init_subtitle(current_time, ocr_text)
         else:
             # 자막 유사성 및 자막 공백 카운트를 고려하여 자막 병합
-            similarity = fuzz.ratio(current_subtitle.text, ocr_text)
+            similarity = fuzz.partial_ratio(current_subtitle.text, ocr_text)
             if similarity > similarity_threshold and none_subtitle_interval < 8:
                 current_subtitle.end_time = current_time
                 current_subtitle.text = ocr_text
