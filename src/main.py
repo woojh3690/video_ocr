@@ -365,13 +365,12 @@ async def resume_ocr(task_id: str = Form(...)):
     return {"detail": f"Task {task_id} resumed"}
     
 
-async def broadcast_update(message):
+async def broadcast_update(task: Task):
     """
     모든 연결된 클라이언트 WebSocket에 message(JSON)를 전송합니다.
     전송에 실패한 경우 해당 WebSocket은 리스트에서 제거합니다.
     """
-    if is_dataclass(message):
-        message = asdict(message)
+    message = asdict(task)
 
     to_remove = []
     for ws in global_websocket_connections:
