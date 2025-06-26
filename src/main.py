@@ -365,13 +365,12 @@ async def resume_ocr(task_id: str = Form(...)):
     return {"detail": f"Task {task_id} resumed"}
     
 
-async def broadcast_update(message):
+async def broadcast_update(task: Task):
     """
     모든 연결된 클라이언트 WebSocket에 message(JSON)를 전송합니다.
     전송에 실패한 경우 해당 WebSocket은 리스트에서 제거합니다.
     """
-    if is_dataclass(message):
-        message = asdict(message)
+    message = asdict(task)
 
     to_remove = []
     for ws in global_websocket_connections:
@@ -416,6 +415,16 @@ def delete_task(task_id: str):
             # 비디오 파일이 존재하면 삭제
             if os.path.exists(video_path):
                 os.remove(video_path)
+
+            base_name = os.path.splitext(os.path.basename(video_filename))[0]
+            csv_path = os.path.join(UPLOAD_DIR, f"{base_name}.csv")
+            if os.path.exists(csv_path):
+                os.remove(csv_path)
+
+            srt_pattern = os.path.join(UPLOAD_DIR, f"{glob.escape(base_name)}.*.srt")
+            for srt_file in glob.glob(srt_pattern):
+                if os.path.exists(srt_file):
+                    os.remove(srt_file)
         del tasks[task_id]
 
 

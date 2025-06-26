@@ -1,4 +1,4 @@
-FROM python:3.11
+FROM python:3.11-slim
 LABEL maintainer="woojh3690@iwaz.co.kr"
 
 # 작업 디렉토리 설정
@@ -8,9 +8,16 @@ WORKDIR /app
 ARG DEBIAN_FRONTEND=noninteractive
 ENV TZ=Asia/Seoul
 
-RUN apt-get update && apt-get install ffmpeg libsm6 libxext6  -y
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends \
+        ffmpeg            \
+        python3-opencv    \
+        libsm6 libxext6 && \
+    rm -rf /var/lib/apt/lists/*
 
-# 의존성 파일 복사 및 설치
+# python3-opencv 설치 경로 추가
+ENV PYTHONPATH=/usr/lib/python3/dist-packages:$PYTHONPATH
+
 COPY requirements.txt ./ 
 RUN pip install --no-cache-dir -r requirements.txt
 
