@@ -415,6 +415,16 @@ def delete_task(task_id: str):
             # 비디오 파일이 존재하면 삭제
             if os.path.exists(video_path):
                 os.remove(video_path)
+
+            base_name = os.path.splitext(os.path.basename(video_filename))[0]
+            csv_path = os.path.join(UPLOAD_DIR, f"{base_name}.csv")
+            if os.path.exists(csv_path):
+                os.remove(csv_path)
+
+            srt_pattern = os.path.join(UPLOAD_DIR, f"{glob.escape(base_name)}.*.srt")
+            for srt_file in glob.glob(srt_pattern):
+                if os.path.exists(srt_file):
+                    os.remove(srt_file)
         del tasks[task_id]
 
 
