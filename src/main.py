@@ -62,7 +62,7 @@ if not os.path.exists(UPLOAD_DIR):
 # 예: { task_id: { "video_filename": str, "status": Status,
 #                   "progress": 0~100, "messages": [progress update objects],
 #                   "result": srt 파일 경로, "error": str, "task_start_time": timestamp } }
-PICKLE_FILENAME = os.path.join(UPLOAD_DIR, 'tasks.pkl')
+PICKLE_FILENAME = 'tasks.pkl'
 tasks: Dict[str, Task] = {}
 
 
