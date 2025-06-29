@@ -21,7 +21,8 @@ from fastapi.templating import Jinja2Templates
 import aiofiles
 import cv2
 
-from core.ocr import process_ocr, UPLOAD_DIR
+from core.ocr import process_ocr, UPLOAD_DIR, base_url
+import openai
 
 
 class Status(str, Enum):
@@ -136,6 +137,16 @@ templates = Jinja2Templates(directory="templates")
 @app.get("/", response_class=HTMLResponse)
 async def read_root(request: Request):
     return templates.TemplateResponse("index.html", {"request": request})
+
+@app.get("/vllm_health")
+async def vllm_health():
+    """Check if vllm server is reachable"""
+    client = openai.AsyncOpenAI(base_url=base_url, api_key="dummy_key")
+    try:
+        await client.models.list()
+        return {"status": "ok"}
+    except Exception:
+        return {"status": "down"}
 
 @app.post("/upload_video/")
 async def upload_video(file: UploadFile = File(...)):

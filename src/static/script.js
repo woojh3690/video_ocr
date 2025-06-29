@@ -3,6 +3,13 @@ let videoUpload = document.getElementById('video-upload');
 let startOcrBtn = document.getElementById('start-ocr-btn');
 let ocrProgressContainer = document.getElementById('ocr-progress-container');
 
+// vllm 서버 상태
+let vllmReady = false;
+// 현재 실행 중인 작업이 있는지 여부
+let isTaskRunning = false;
+// 각 작업의 상태 기록
+const taskStatusMap = {};
+
 let boundingBox = document.getElementById('bounding-box');
 let handles = document.querySelectorAll('.handle');
 
@@ -60,6 +67,46 @@ fetch('/tasks/')
 
 // --- 함수 정의 ---
 
+// 버튼 상태 업데이트
+function updateButtonState() {
+    if (startOcrBtn) {
+        startOcrBtn.disabled = !vllmReady;
+    }
+    document.querySelectorAll('.resume-btn').forEach(btn => {
+        btn.disabled = !vllmReady;
+    });
+}
+
+function updateRunningStatus(taskId, status) {
+    if (typeof status === 'undefined') {
+        delete taskStatusMap[taskId];
+    } else {
+        taskStatusMap[taskId] = status;
+    }
+    isTaskRunning = Object.values(taskStatusMap).some(s => s === 'running');
+}
+
+// vllm 서버 상태 체크
+async function checkVllmHealth() {
+    if (isTaskRunning) {
+        vllmReady = true;
+        updateButtonState();
+        return;
+    }
+    try {
+        const resp = await fetch('/vllm_health');
+        const data = await resp.json();
+        vllmReady = data.status === 'ok';
+    } catch (err) {
+        vllmReady = false;
+    }
+    updateButtonState();
+}
+
+// 주기적으로 서버 상태 확인
+checkVllmHealth();
+setInterval(checkVllmHealth, 10000);
+
 // 작업 제어 버튼을 상태에 맞게 설정
 function setActionButtons(row, status, taskId) {
     const cell = row.querySelector('.action-cell');
@@ -80,6 +127,7 @@ function setActionButtons(row, status, taskId) {
         resumeBtn.onclick = function() {
             resumeTask(taskId);
         };
+        resumeBtn.disabled = !vllmReady;
 
         const deleteBtn = document.createElement('button');
         deleteBtn.className = 'btn btn-danger btn-sm delete-btn';
@@ -138,6 +186,7 @@ function updateTaskRow(task) {
         `;
         taskListTableBody.appendChild(row);
         setActionButtons(row, status, taskId);
+        updateRunningStatus(taskId, status);
         if (status === 'completed') {
             row.querySelector('.download-subtitles').onclick = function() {
                 window.location.href = `/download_srt/${videoFile}`;
@@ -156,6 +205,7 @@ function updateTaskRow(task) {
 
         // 버튼 업데이트
         setActionButtons(row, status, taskId);
+        updateRunningStatus(taskId, status);
         if (status === 'completed') {
             row.querySelector('.download-subtitles').onclick = function() {
                 window.location.href = `/download_srt/${videoFile}`;
@@ -206,6 +256,8 @@ function deleteTask(taskId) {
         if (row) {
             row.remove();
         }
+        delete taskStatusMap[taskId];
+        updateRunningStatus(taskId, undefined);
     })
     .catch(err => console.error(err));
 }
