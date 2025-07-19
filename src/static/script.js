@@ -13,7 +13,6 @@ const taskStatusMap = {};
 let boundingBox = document.getElementById('bounding-box');
 let handles = document.querySelectorAll('.handle');
 
-let intervalValue = 0.3;
 let dragging = false;
 let dragDirection = '';
 let startY = 0;
@@ -393,25 +392,6 @@ document.addEventListener('mouseup', function(e) {
     dragDirection = '';
 });
 
-// interval 설정
-const intervalInput = document.getElementById('intervalInput');
-intervalInput.addEventListener("input", (event) => {
-    intervalValue = parseFloat(event.target.value);
-});
-
-const frameBasedOCRCheckbox = document.getElementById('frameBasedOCR');
-frameBasedOCRCheckbox.addEventListener('change', function() {
-    if (this.checked) {
-        // 체크되면 입력 필드를 비활성화하고 intervalValue를 -1로 설정
-        intervalInput.disabled = true;
-        intervalValue = -1;
-    } else {
-        // 체크 해제 시 입력 필드 활성화 후 현재 값을 intervalValue로 사용
-        intervalInput.disabled = false;
-        intervalValue = parseFloat(intervalInput.value);
-    }
-});
-
 // mm:ss 형식의 문자열을 초 단위로 변환하는 함수 (예: "02:30" -> 150초)
 function parseTimeString(timeStr) {
     const parts = timeStr.split(':');
@@ -456,7 +436,6 @@ startOcrBtn.addEventListener('click', async function() {
     formData.append('y', y);
     formData.append('width', width);
     formData.append('height', height);
-    formData.append('interval_value', intervalValue);
     if (startTime != 0) {
         formData.append('start_time', startTime);
     }
