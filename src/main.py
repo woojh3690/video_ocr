@@ -47,7 +47,6 @@ class Task:
     ocr_y: int = 0
     ocr_width: int = 0
     ocr_height: int = 0
-    interval: float = 0.0
     ocr_start_time: Optional[int] = 0
     ocr_end_time: Optional[int] = None
     result: Optional[str] = None
@@ -219,8 +218,7 @@ async def start_ocr_endpoint(
     x: int = Form(...), 
     y: int = Form(...), 
     width: int = Form(...), 
-    height: int = Form(...), 
-    interval_value: float = Form(...),
+    height: int = Form(...),
     start_time: Optional[int] = Form(0),
     end_time: Optional[int] = Form(None)
 ):
@@ -272,7 +270,6 @@ async def start_ocr_endpoint(
         ocr_y=y,
         ocr_width=width,
         ocr_height=height,
-        interval=interval_value,
         ocr_start_time=start_time,
         ocr_end_time=end_time,
     )
@@ -285,14 +282,14 @@ async def start_ocr_endpoint(
     
     return {"task_id": task_id}
 
-async def run_ocr_task(task_id, video_filename, x, y, width, height, interval, start_time, end_time):
+async def run_ocr_task(task_id, video_filename, x, y, width, height, start_time, end_time):
     print(f"[시작] {task_id} - {video_filename}")
     task = tasks[task_id]
     task.status = Status.running
     task.task_start_time = None
     await broadcast_update(task)
     try:
-        async for progress in process_ocr(video_filename, x, y, width, height, interval, start_time, end_time):
+        async for progress in process_ocr(video_filename, x, y, width, height, start_time, end_time):
             # 취소 요청이 들어왔는지 확인
             if task.status == Status.cancelling:
                 task.status = Status.cancelled
@@ -338,7 +335,6 @@ async def start_next_task():
             next_task.ocr_y,
             next_task.ocr_width,
             next_task.ocr_height,
-            next_task.interval,
             next_task.ocr_start_time,
             next_task.ocr_end_time,
         )

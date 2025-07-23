@@ -59,10 +59,12 @@ def format_time(seconds):
 
 # 동영상 파일에서 프레임을 배치 단위로 생성하는 제너레이터.
 def frame_batch_generator(
-    cap: cv2.VideoCapture, 
-    x, y, width, height, 
-    frame_interval,
-    end_frame: int = None
+    cap: cv2.VideoCapture,
+    x: int,
+    y: int,
+    width: int,
+    height: int,
+    end_frame: int = None,
 ) -> Generator[List, None, None]:
     while True:
         # 프레임 읽기
@@ -74,10 +76,6 @@ def frame_batch_generator(
             cap.release()
             break
         
-        # frame_interval 프레임 마다 OCR 수행
-        if frame_number % frame_interval != 0:
-            continue
-
         # 이미지 크롭
         cropped_frame = frame[y:y+height, x:x+width]
 
@@ -123,11 +121,13 @@ async def ocr_one_frame(
     return frame_number, ocr_text
     
 async def process_ocr(
-    video_filename, 
-    x, y, width, height, 
-    interval=0.3, 
-    start_time=0, 
-    end_time=None
+    video_filename,
+    x: int,
+    y: int,
+    width: int,
+    height: int,
+    start_time: int = 0,
+    end_time: int | None = None,
 ):
     # 파일 경로 정보 초기화
     UPLOAD_DIR = "uploads"
@@ -148,9 +148,8 @@ async def process_ocr(
     end_frame = int(cap.get(cv2.CAP_PROP_FRAME_COUNT)) if end_time is None else int(end_time * frame_rate) # OCR 종료 프레임
     total_frames = end_frame - start_frame # OCR 을 진행할 총 프레임 수
 
-    # interval 초마다 OCR 수행
     frame_rate = cap.get(cv2.CAP_PROP_FPS)
-    frame_interval = max(1, int(round(frame_rate * interval)))  # 최소 1프레임
+    frame_interval = 1
 
     # OCR 을 진행할 프레임으로 이동 
     start_ocr_frame = max(start_frame, last_frame_number)
@@ -177,7 +176,7 @@ async def process_ocr(
         #  실행 중·대기 중인 태스크 집합
         running: set[asyncio.Task] = set()
 
-        for frame_number, img_b64 in frame_batch_generator(cap, x, y, width, height, frame_interval, end_frame):
+        for frame_number, img_b64 in frame_batch_generator(cap, x, y, width, height, end_frame):
 
             # 새 태스크 추가
             task = asyncio.create_task(ocr_one_frame(client, frame_number, img_b64))
@@ -202,7 +201,7 @@ async def process_ocr(
                     "time": round(fn / frame_rate, 3),
                     "text": ocr_text,
                 })
-                next_frame_to_write += frame_interval     # 혹은 frame_interval 간격만큼 증가
+                next_frame_to_write += 1
                 percentage = round((fn - start_frame) / total_frames * 100, 2)
                 yield percentage
             csvfile.flush()
