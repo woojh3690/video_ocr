@@ -10,7 +10,7 @@ import atexit
 import signal
 import traceback
 from enum import Enum
-from dataclasses import dataclass, field, asdict, is_dataclass
+from dataclasses import dataclass, field, asdict
 from typing import Dict, List, Optional
 
 from fastapi import FastAPI, Form, HTTPException, Request, WebSocket, WebSocketDisconnect
