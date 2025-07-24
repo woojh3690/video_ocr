@@ -110,6 +110,13 @@ function loadDirectory(path = '') {
 }
 
 function selectVideo(path) {
+    const videoExtensions = ['.mp4', '.avi', '.mov', '.mkv', '.webm', '.mpg', '.mpeg', '.wmv'];
+    const lower = path.toLowerCase();
+    const isVideo = videoExtensions.some(ext => lower.endsWith(ext));
+    if (!isVideo) {
+        alert('비디오 파일을 선택해주세요.');
+        return;
+    }
     vfilename = path;
     const targetDiv = document.querySelector('#video-container');
     targetDiv.style.display = 'block';
