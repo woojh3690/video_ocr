@@ -1,5 +1,4 @@
 let video = document.getElementById('video');
-let videoUpload = document.getElementById('video-upload');
 let startOcrBtn = document.getElementById('start-ocr-btn');
 let ocrProgressContainer = document.getElementById('ocr-progress-container');
 
@@ -25,6 +24,10 @@ let startTop = 0;
 let startLeft = 0;
 
 let vfilename = null;
+let fileBrowser = document.getElementById('file-browser');
+let fileList = document.getElementById('file-list');
+let currentPathElem = document.getElementById('current-path');
+let currentPath = '';
 
 // DOM 요소들: 작업 목록 뷰와 OCR 생성 뷰
 const taskListView = document.getElementById('task-list-view');
@@ -65,6 +68,66 @@ fetch('/tasks/')
     .catch(err => console.error(err));
 
 // --- 함수 정의 ---
+
+function encodePath(path) {
+    return path.split('/').map(encodeURIComponent).join('/');
+}
+
+function loadDirectory(path = '') {
+    fetch(`/browse/?path=${encodeURIComponent(path)}`)
+        .then(resp => resp.json())
+        .then(data => {
+            currentPath = data.path;
+            currentPathElem.textContent = '/' + (currentPath ? currentPath : '');
+            fileList.innerHTML = '';
+            if (currentPath) {
+                const up = document.createElement('li');
+                up.className = 'list-group-item list-group-item-action';
+                up.textContent = '..';
+                up.onclick = () => {
+                    const parts = currentPath.split('/');
+                    parts.pop();
+                    loadDirectory(parts.join('/'));
+                };
+                fileList.appendChild(up);
+            }
+            data.entries.forEach(entry => {
+                const item = document.createElement('li');
+                item.className = 'list-group-item list-group-item-action';
+                item.textContent = entry.name + (entry.is_dir ? '/' : '');
+                if (entry.is_dir) {
+                    item.onclick = () => {
+                        loadDirectory(currentPath ? `${currentPath}/${entry.name}` : entry.name);
+                    };
+                } else {
+                    item.onclick = () => {
+                        selectVideo(currentPath ? `${currentPath}/${entry.name}` : entry.name);
+                    };
+                }
+                fileList.appendChild(item);
+            });
+        });
+}
+
+function selectVideo(path) {
+    vfilename = path;
+    const targetDiv = document.querySelector('#video-container');
+    targetDiv.style.display = 'block';
+    let url = `/videos/${encodePath(path)}`;
+    video.src = url;
+    video.load();
+    video.onloadedmetadata = function() {
+        videoWidth = video.videoWidth;
+        videoHeight = video.videoHeight;
+        let videoContainer = document.getElementById('video-container');
+        videoContainer.style.width = video.clientWidth + 'px';
+        videoContainer.style.height = video.clientHeight + 'px';
+        boundingBox.style.top = '0px';
+        boundingBox.style.left = '0px';
+        boundingBox.style.width = video.clientWidth + 'px';
+        boundingBox.style.height = (video.clientHeight - video.controls.offsetHeight) + 'px';
+    };
+}
 
 // 버튼 상태 업데이트
 function updateButtonState() {
@@ -155,7 +218,7 @@ function updateTaskRow(task) {
     let status = task.status || "";
     let statusHtml;
     if (status === 'completed') {
-        statusHtml = `<span class="download-subtitles" style="cursor:pointer; color: blue; text-decoration: underline;">${status}</span>`;
+        statusHtml = 'completed';
     } else {
         statusHtml = (status === 'waiting') ? '대기' : status;
         if (task.error) {
@@ -186,11 +249,6 @@ function updateTaskRow(task) {
         taskListTableBody.appendChild(row);
         setActionButtons(row, status, taskId);
         updateRunningStatus(taskId, status);
-        if (status === 'completed') {
-            row.querySelector('.download-subtitles').onclick = function() {
-                window.location.href = `/download_srt/${videoFile}`;
-            };
-        }
     } else {
         // 기존 row가 있으면 변경된 부분만 업데이트
         row.querySelector('.video-file').innerText = videoFile;
@@ -205,11 +263,6 @@ function updateTaskRow(task) {
         // 버튼 업데이트
         setActionButtons(row, status, taskId);
         updateRunningStatus(taskId, status);
-        if (status === 'completed') {
-            row.querySelector('.download-subtitles').onclick = function() {
-                window.location.href = `/download_srt/${videoFile}`;
-            };
-        }
     }
 }
 
@@ -265,6 +318,10 @@ function deleteTask(taskId) {
 function switchToOcrCreationView() {
     taskListView.style.display = 'none';
     ocrCreationView.style.display = 'block';
+    loadDirectory('');
+    const targetDiv = document.querySelector('#video-container');
+    targetDiv.style.display = 'none';
+    vfilename = null;
 }
 
 function switchToTaskListView() {
@@ -283,46 +340,7 @@ backToListBtn.addEventListener('click', function() {
 });
 
 
-// 비디오 업로드 및 로드
-videoUpload.addEventListener('change', function(e) {
-    // 비디오 컨테이너 표시
-    const targetDiv = document.querySelector("#video-container");
-    targetDiv.style.display = "block";
-    const fileArea = document.querySelector(".file-area");
-    fileArea.style.display = "none";
 
-    let file = e.target.files[0];
-    if (file) {
-        // 비디오 업로드 및 로드
-        let formData = new FormData();
-        formData.append('file', file);
-        fetch('/upload_video/', {
-            method: 'POST',
-            body: formData
-        }).then(response => response.json())
-        .then(data => {
-            vfilename = data.filename;
-            let url = `/videos/${data.filename}`;
-            video.src = url;
-            video.load();
-            video.onloadedmetadata = function() {
-                videoWidth = video.videoWidth;
-                videoHeight = video.videoHeight;
-    
-                // 비디오 컨테이너 크기 조정
-                let videoContainer = document.getElementById('video-container');
-                videoContainer.style.width = video.clientWidth + 'px';
-                videoContainer.style.height = video.clientHeight + 'px';
-    
-                // 바운딩 박스 초기화
-                boundingBox.style.top = '0px';
-                boundingBox.style.left = '0px';
-                boundingBox.style.width = video.clientWidth + 'px';
-                boundingBox.style.height = (video.clientHeight - video.controls.offsetHeight) + 'px';
-            };
-        });
-    }
-});
 
 // 드래그 핸들 이벤트 처리
 handles.forEach(function(handle) {
@@ -430,8 +448,12 @@ startOcrBtn.addEventListener('click', async function() {
     let startTime = parseTimeString(startTimeInput.value);
     let endTime = parseTimeString(endTimeInput.value);
     
+    if (!vfilename) {
+        alert('비디오 파일을 선택해주세요.');
+        return;
+    }
     let formData = new FormData();
-    formData.append('video_filename', videoUpload.files[0].name);
+    formData.append('video_filename', vfilename);
     formData.append('x', x);
     formData.append('y', y);
     formData.append('width', width);

@@ -2,7 +2,6 @@ import os
 import glob
 import sys
 import re
-import shutil
 import uuid
 import asyncio
 import time
@@ -14,7 +13,7 @@ from enum import Enum
 from dataclasses import dataclass, field, asdict, is_dataclass
 from typing import Dict, List, Optional
 
-from fastapi import FastAPI, UploadFile, File, Form, HTTPException, Request, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, Form, HTTPException, Request, WebSocket, WebSocketDisconnect
 from fastapi.responses import HTMLResponse, StreamingResponse, FileResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
@@ -155,23 +154,9 @@ async def vllm_health():
     except Exception:
         return {"status": "down"}
 
-@app.post("/upload_video/")
-async def upload_video(file: UploadFile = File(...)):
-    file_location = os.path.join(UPLOAD_DIR, file.filename)
-    
-    # 동일한 파일명이 존재하는 경우 업로드 스킵
-    if os.path.exists(file_location):
-        return {"filename": file.filename, "status": "skipped", "message": "File already exists."}
-    
-    # 파일 저장
-    with open(file_location, "wb") as buffer:
-        shutil.copyfileobj(file.file, buffer)
-    
-    return {"filename": file.filename, "status": "uploaded"}
-
-@app.get("/videos/{video_filename}")
-async def get_video(request: Request, video_filename: str):
-    video_path = os.path.join(UPLOAD_DIR, video_filename)
+@app.get("/videos/{video_path:path}")
+async def get_video(request: Request, video_path: str):
+    video_path = os.path.join(UPLOAD_DIR, video_path)
     if not os.path.exists(video_path):
         raise HTTPException(status_code=404, detail="Video not found")
 
@@ -216,6 +201,20 @@ async def get_video(request: Request, video_filename: str):
     else:
         headers['Accept-Ranges'] = 'bytes'
         return FileResponse(video_path, headers=headers, media_type='video/mp4')
+
+@app.get("/browse/")
+async def browse(path: str = ""):
+    base_dir = os.path.abspath(UPLOAD_DIR)
+    target = os.path.abspath(os.path.join(base_dir, path))
+    if not target.startswith(base_dir) or not os.path.isdir(target):
+        raise HTTPException(status_code=400, detail="Invalid path")
+    entries = []
+    for entry in os.scandir(target):
+        entries.append({"name": entry.name, "is_dir": entry.is_dir()})
+    rel_path = os.path.relpath(target, base_dir)
+    if rel_path == ".":
+        rel_path = ""
+    return {"path": rel_path, "entries": entries}
 
 # ---------------------------
 # 백그라운드 OCR 작업 관련 함수 및 엔드포인트
@@ -494,16 +493,3 @@ async def websocket_endpoint(websocket: WebSocket):
         if websocket in global_websocket_connections:
             global_websocket_connections.remove(websocket)
 
-@app.get("/download_srt/{video_filename}")
-async def download_srt(video_filename: str):
-    base_name = os.path.splitext(os.path.basename(video_filename))[0]
-    pattern = os.path.join(UPLOAD_DIR, f"{glob.escape(base_name)}.??.srt")
-    matching_files = glob.glob(pattern)
-    
-    if matching_files:
-        # 매칭되는 파일이 여러 개라면 첫 번째 파일을 선택합니다.
-        srt_file = matching_files[0]
-        file_name = os.path.basename(srt_file)
-        return FileResponse(srt_file, media_type='application/octet-stream', filename=file_name)
-    else:
-        return {"error": "SRT file not found"}
