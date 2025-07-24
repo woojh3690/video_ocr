@@ -34,11 +34,9 @@
         <div id="ocr-creation-view" style="display:none;">
             <div class="row mt-4">
                 <div class="col-md-12">
-                    <div class="file-area">
-                        <input type="file" id="video-upload" accept="video/*" class="form-control-file" required>
-                        <div class="file-dummy">
-                            <span class="default">파일을 선택하려면 클릭하거나 파일을 여기에 드래그하세요.</span>
-                        </div>
+                    <div id="file-browser" class="mb-3">
+                        <div id="current-path" class="font-weight-bold"></div>
+                        <ul id="file-list" class="list-group"></ul>
                     </div>
                 </div>
                 <div class="col-md-12 position-relative">
@@ -66,7 +64,7 @@
                 </div>
                 <div class="col-md-8"></div>
             </div>
-            <div class="row mt-4">
+            <div class="row mt-4 mb-4">
                 <div class="col-md-12">
                     <button id="back-to-list-btn" class="btn btn-secondary float-left">작업 큐로 돌아가기</button>
                     <button id="start-ocr-btn" class="btn btn-success float-right">OCR 시작</button>
