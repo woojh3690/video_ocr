@@ -88,6 +88,11 @@ body {
     padding: 10px;
 }
 
+/* OCR 생성 뷰의 하단 버튼 여백 */
+#ocr-creation-view .btn {
+    margin-bottom: 10px;
+}
+
 @media (prefers-color-scheme: dark) {
     body {
         background-color: #121212;
@@ -100,6 +105,18 @@ body {
 
     #file-browser {
         border-color: #666;
+        background-color: #1e1e1e;
+    }
+
+    .list-group-item {
+        background-color: #333;
+        color: #e1e1e1;
+        border-color: #555;
+    }
+
+    .list-group-item:hover {
+        background-color: #444;
+        color: #ffffff;
     }
 
 }
