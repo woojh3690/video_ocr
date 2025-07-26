@@ -127,7 +127,8 @@ async def process_ocr(
     # 파일 경로 정보 초기화
     UPLOAD_DIR = "uploads"
     video_path = os.path.join(UPLOAD_DIR, video_filename)
-    csv_path = str(Path(video_path).with_suffix(".csv"))
+    video_path_obj = Path(video_path)
+    csv_path = str(video_path_obj.with_suffix(".csv"))
 
     # 마지막으로 OCR 처리된 프레임 번호 확인
     fieldnames = ['frame_number', 'time', 'text']
@@ -243,7 +244,7 @@ async def process_ocr(
             except LangDetectException:
                 pass
     most_common_lang = Counter(langs).most_common(1)[0][0] if langs else "un"
-    srt_path = str(Path(video_path).with_suffix(f"{most_common_lang}.srt"))
+    srt_path = str(video_path_obj.parent / (video_path_obj.with_suffix('').name + f".{most_common_lang}.srt"))
 
     # 텍스트 병합 모듈 사용
     ocr_progress_data = merge_ocr_texts(ocr_text_data)
