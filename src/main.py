@@ -10,6 +10,7 @@ import atexit
 import signal
 import traceback
 from enum import Enum
+from pathlib import Path
 from dataclasses import dataclass, field, asdict
 from typing import Dict, List, Optional
 
@@ -425,15 +426,11 @@ def delete_task(task_id: str):
     if task_id in tasks:
         video_filename = tasks[task_id].video_filename
         if video_filename:
-            base_name = os.path.splitext(os.path.basename(video_filename))[0]
-            csv_path = os.path.join(UPLOAD_DIR, f"{base_name}.csv")
+            video_path = os.path.join(UPLOAD_DIR, video_filename)
+            video_path_obj = Path(video_path)
+            csv_path = str(video_path_obj.with_suffix(".csv"))
             if os.path.exists(csv_path):
                 os.remove(csv_path)
-
-            srt_pattern = os.path.join(UPLOAD_DIR, f"{glob.escape(base_name)}.*.srt")
-            for srt_file in glob.glob(srt_pattern):
-                if os.path.exists(srt_file):
-                    os.remove(srt_file)
         del tasks[task_id]
 
 
