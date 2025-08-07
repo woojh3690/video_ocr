@@ -2,8 +2,6 @@ let video = document.getElementById('video');
 let startOcrBtn = document.getElementById('start-ocr-btn');
 let ocrProgressContainer = document.getElementById('ocr-progress-container');
 
-// vllm 서버 상태
-let vllmReady = false;
 // 현재 실행 중인 작업이 있는지 여부
 let isTaskRunning = false;
 // 각 작업의 상태 기록
@@ -136,16 +134,6 @@ function selectVideo(path) {
     };
 }
 
-// 버튼 상태 업데이트
-function updateButtonState() {
-    if (startOcrBtn) {
-        startOcrBtn.disabled = !vllmReady;
-    }
-    document.querySelectorAll('.resume-btn').forEach(btn => {
-        btn.disabled = !vllmReady;
-    });
-}
-
 function updateRunningStatus(taskId, status) {
     if (typeof status === 'undefined') {
         delete taskStatusMap[taskId];
@@ -175,7 +163,6 @@ function setActionButtons(row, status, taskId) {
         resumeBtn.onclick = function() {
             resumeTask(taskId);
         };
-        resumeBtn.disabled = !vllmReady;
 
         const deleteBtn = document.createElement('button');
         deleteBtn.className = 'btn btn-danger btn-sm delete-btn';
