@@ -1,5 +1,5 @@
 FROM python:3.11-slim
-LABEL maintainer="woojh3690@iwaz.co.kr"
+LABEL maintainer="woojh3690@gmail.com"
 
 # 작업 디렉토리 설정
 WORKDIR /app
