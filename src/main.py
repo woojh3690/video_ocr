@@ -14,16 +14,17 @@ from pathlib import Path
 from dataclasses import dataclass, field, asdict
 from typing import Dict, List, Optional
 
+import cv2
+import openai
+import aiofiles
 from fastapi import FastAPI, Form, HTTPException, Request, WebSocket, WebSocketDisconnect
 from fastapi.responses import HTMLResponse, StreamingResponse, FileResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
-import aiofiles
-import cv2
+
 
 from core.ocr import process_ocr, UPLOAD_DIR, base_url
-import openai
-
+from core.docker_manager import DockerManager
 
 class Status(str, Enum):
     waiting = "waiting"
@@ -32,7 +33,6 @@ class Status(str, Enum):
     failed = "failed"
     cancelling = "cancelling"
     cancelled = "cancelled"
-
 
 @dataclass
 class Task:
@@ -52,7 +52,11 @@ class Task:
     result: Optional[str] = None
     error: Optional[str] = None
 
+docker_url: str = os.getenv("DOCKER_URL", "tcp://192.168.1.63:2375")
+docker_name: str = os.getenv("DOCKER_NAME", "vllm_7b")
+
 app = FastAPI()
+docker_manager = DockerManager(docker_url)
 
 # 업로드된 비디오 파일 저장 경로
 if not os.path.exists(UPLOAD_DIR):
@@ -145,15 +149,14 @@ templates = Jinja2Templates(directory="templates")
 async def read_root(request: Request):
     return templates.TemplateResponse("index.html", {"request": request})
 
-@app.get("/vllm_health")
-async def vllm_health():
+async def is_vllm_health():
     """Check if vllm server is reachable"""
     client = openai.AsyncOpenAI(base_url=base_url, api_key="dummy_key")
     try:
         await client.models.list()
-        return {"status": "ok"}
+        return True
     except Exception:
-        return {"status": "down"}
+        return False
 
 @app.get("/videos/{video_path:path}")
 async def get_video(request: Request, video_path: str):
@@ -329,11 +332,26 @@ async def run_ocr_task(task_id, video_filename, x, y, width, height, start_time,
 
 async def start_next_task():
     """대기 상태인 다음 작업이 있으면 실행합니다."""
+
+    # 현재 실행 중인 작업이 있다면 다음 작업을 시작하지 않습니다.
     if get_running_task_id() is not None:
         return
     next_id = get_next_waiting_task_id()
     if not next_id:
+        # 대기 중인 작업이 없으면 vLLM 컨테이너 중지로 자원 절약
+        docker_manager.stop_container(docker_name)
         return
+
+    # 작업을 실행하기 전에 vLLM 컨테이너가 실행 중인지 확인하고, 필요시 시작합니다.
+    if not await is_vllm_health():
+        print("vLLM 서버가 준비되지 않았습니다. 컨테이너를 시작합니다.")
+        docker_manager.start_container(docker_name)
+
+    # vLLM 서버가 준비될 때까지 대기
+    while not await is_vllm_health():
+        await asyncio.sleep(5)
+    print("vLLM 서버가 준비되었습니다.")
+
     next_task = tasks[next_id]
     asyncio.create_task(
         run_ocr_task(

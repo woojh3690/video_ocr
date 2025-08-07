@@ -155,27 +155,6 @@ function updateRunningStatus(taskId, status) {
     isTaskRunning = Object.values(taskStatusMap).some(s => s === 'running');
 }
 
-// vllm 서버 상태 체크
-async function checkVllmHealth() {
-    if (isTaskRunning) {
-        vllmReady = true;
-        updateButtonState();
-        return;
-    }
-    try {
-        const resp = await fetch('/vllm_health');
-        const data = await resp.json();
-        vllmReady = data.status === 'ok';
-    } catch (err) {
-        vllmReady = false;
-    }
-    updateButtonState();
-}
-
-// 주기적으로 서버 상태 확인
-checkVllmHealth();
-setInterval(checkVllmHealth, 10000);
-
 // 작업 제어 버튼을 상태에 맞게 설정
 function setActionButtons(row, status, taskId) {
     const cell = row.querySelector('.action-cell');
