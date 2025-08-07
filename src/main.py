@@ -295,6 +295,17 @@ async def start_ocr_endpoint(
 
 async def run_ocr_task(task_id, video_filename, x, y, width, height, start_time, end_time):
     print(f"[시작] {task_id} - {video_filename}")
+
+    # 작업을 실행하기 전에 vLLM 컨테이너가 실행 중인지 확인하고, 필요시 시작합니다.
+    if not await is_vllm_health():
+        print("vLLM 서버가 준비되지 않았습니다. 컨테이너를 시작합니다.")
+        docker_manager.start_container(docker_name)
+
+    # vLLM 서버가 준비될 때까지 대기
+    while not await is_vllm_health():
+        await asyncio.sleep(5)
+    print("vLLM 서버가 준비되었습니다.")
+
     task = tasks[task_id]
     task.status = Status.running
     task.task_start_time = None
@@ -341,16 +352,6 @@ async def start_next_task():
         # 대기 중인 작업이 없으면 vLLM 컨테이너 중지로 자원 절약
         docker_manager.stop_container(docker_name)
         return
-
-    # 작업을 실행하기 전에 vLLM 컨테이너가 실행 중인지 확인하고, 필요시 시작합니다.
-    if not await is_vllm_health():
-        print("vLLM 서버가 준비되지 않았습니다. 컨테이너를 시작합니다.")
-        docker_manager.start_container(docker_name)
-
-    # vLLM 서버가 준비될 때까지 대기
-    while not await is_vllm_health():
-        await asyncio.sleep(5)
-    print("vLLM 서버가 준비되었습니다.")
 
     next_task = tasks[next_id]
     asyncio.create_task(
