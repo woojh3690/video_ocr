@@ -1,6 +1,16 @@
 /* 작업 목록 테이블 관련 스타일 */
 #task-list {
     margin-top: 20px;
+    table-layout: fixed;
+    width: 100%;
+}
+
+#task-list th:first-child,
+#task-list td.video-file {
+    width: 200px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
 }
 
 .table td {
