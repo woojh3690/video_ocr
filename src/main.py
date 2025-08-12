@@ -1,5 +1,4 @@
 import os
-import glob
 import sys
 import re
 import uuid
@@ -10,6 +9,7 @@ import atexit
 import signal
 import traceback
 from enum import Enum
+from json import dumps
 from pathlib import Path
 from dataclasses import dataclass, field, asdict
 from typing import Dict, List, Optional
@@ -21,7 +21,7 @@ from fastapi import FastAPI, Form, HTTPException, Request, WebSocket, WebSocketD
 from fastapi.responses import HTMLResponse, StreamingResponse, FileResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
-
+from kafka import KafkaProducer
 
 from core.ocr import process_ocr, UPLOAD_DIR, base_url
 from core.docker_manager import DockerManager
@@ -54,6 +54,13 @@ class Task:
 
 docker_url: str = os.getenv("DOCKER_URL", "tcp://192.168.1.63:2375")
 docker_name: str = os.getenv("DOCKER_NAME", "vllm_7b")
+
+producer = KafkaProducer(
+    acks=0, 
+    compression_type="gzip", 
+    bootstrap_servers=[os.getenv("KAFKA_URL", "192.168.1.17:19092")], 
+    value_serializer=lambda x: dumps(x).encode("utf-8")
+)
 
 app = FastAPI()
 docker_manager = DockerManager(docker_url)
@@ -330,6 +337,10 @@ async def run_ocr_task(task_id, video_filename, x, y, width, height, start_time,
         filename_without_ext = os.path.splitext(os.path.basename(video_filename))[0]
         srt_path = os.path.join(UPLOAD_DIR, f"{filename_without_ext}.srt")
         task.result = srt_path if os.path.exists(srt_path) else None
+        producer.send("discord_bot", {
+            "type": "msg",
+            "msg": f"{video_filename} OCR 완료."
+        })
         await broadcast_update(task)
     except Exception as e:
         task.status = Status.failed
