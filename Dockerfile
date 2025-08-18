@@ -1,60 +1,43 @@
-FROM python:3.12-slim
+FROM debian:trixie-slim
 LABEL maintainer="woojh3690@gmail.com"
 
-# 작업 디렉토리 설정
+# 작업 디렉토리
 WORKDIR /app
 
-# tzdata timezone 설정
+# 비대화형 tzdata, 타임존
 ARG DEBIAN_FRONTEND=noninteractive
 ENV TZ=Asia/Seoul
 
-# 캐시 무효화를 위한 변수(필요시 값만 바꾸면 apt 레이어 다시 실행)
-ARG APT_CACHE_BUST=20250818
-
-# 필수 패키지 설치
+# 필수 패키지 설치 (브리지 불필요)
+# - python3/python3-pip: 런타임/패키지 설치
+# - python3-opencv: 시스템 FFmpeg과 링크된 OpenCV 파이썬 바인딩
+# - ffmpeg: AV1 등 디코딩/인코딩
+# - libgl1, libglib2.0-0, libsm6, libxext6: OpenCV 런타임 의존성(HIGHGUI/VideoIO 등)
+# - tzdata: 타임존 설정
 RUN set -eux; \
-    echo "APT_CACHE_BUST=${APT_CACHE_BUST}"; \
-    apt-get update && \
+    apt-get update; \
     apt-get install -y --no-install-recommends \
+        python3 python3-pip python3-opencv \
         ffmpeg \
-        python3-opencv \
-        libgl1 \
-        libglib2.0-0 \
-        libsm6 \
-        libxext6 \
-        tzdata && \
+        libgl1 libglib2.0-0 libsm6 libxext6 \
+        tzdata; \
+    ln -snf /usr/share/zoneinfo/$TZ /etc/localtime; echo $TZ > /etc/timezone; \
     rm -rf /var/lib/apt/lists/*
 
-# python3-opencv 를 파이썬 검색 경로에 영구 추가
-# /usr/lib/python3*/dist-packages 를 전부 모아 기록 (3.11/3.12 등 어떤 버전이든 커버)
-RUN python - <<'PY'
-import site, pathlib, glob, os
-site_dir = pathlib.Path(site.getsitepackages()[0])
-site_dir.mkdir(parents=True, exist_ok=True)
-pth = site_dir / 'debian-dist-packages.pth'
-candidates = sorted(set(p for p in glob.glob('/usr/lib/python3*/dist-packages') if os.path.isdir(p)))
-pth.write_text('\n'.join(candidates) + '\n')
-print("Wrote", pth, "with:\n" + pth.read_text())
-PY
-
-# opencv import 검증 + 실제 설치 파일 경로 확인
-RUN bash -lc "dpkg -L python3-opencv | grep -E '/cv2($|/)' || true"
-RUN python - <<'PY'
-import sys, site, os
+# 빌드 타임 즉시 검증: cv2 임포트/버전/파일 경로
+RUN python3 - <<'PY'
+import sys, cv2
 print("sys.version=", sys.version)
-print("site.getsitepackages()=", site.getsitepackages())
-print("sys.path (dist-packages) ->", [p for p in sys.path if "dist-packages" in p])
-print("cv2 dir exists?",
-      any(os.path.exists(os.path.join(p, 'cv2')) for p in sys.path if 'dist-packages' in p))
-import cv2
 print("cv2.__version__=", cv2.__version__)
 print("cv2.__file__=", cv2.__file__)
 PY
 
+# 파이썬 의존성 설치 (캐시 효율을 위해 requirements 먼저 복사)
 COPY requirements.txt ./
-RUN pip install --no-cache-dir -r requirements.txt
+RUN python3 -m pip install --no-cache-dir -r requirements.txt
 
-# 소스 복사
+# 애플리케이션 코드
 COPY src/ /app/
 
-ENTRYPOINT ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "7340"]
+# 실행(시스템 파이썬 사용: 브리지 불필요)
+ENTRYPOINT ["python3", "-m", "uvicorn", "main:app", "--host", "0.0.0.0", "--port", "7340"]
