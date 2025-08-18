@@ -1,4 +1,4 @@
-FROM python:3.11-slim
+FROM python:3.12-slim
 LABEL maintainer="woojh3690@gmail.com"
 
 # 작업 디렉토리 설정
