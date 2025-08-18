@@ -8,11 +8,17 @@ WORKDIR /app
 ARG DEBIAN_FRONTEND=noninteractive
 ENV TZ=Asia/Seoul
 
-RUN apt-get update && \
+RUN set -eux; \
+    echo "APT_CACHE_BUST=${APT_CACHE_BUST}"; \
+    apt-get update && \
     apt-get install -y --no-install-recommends \
-        ffmpeg            \
-        python3-opencv    \
-        libsm6 libxext6 && \
+        ffmpeg \
+        python3-opencv \
+        libgl1 \
+        libglib2.0-0 \
+        libsm6 \
+        libxext6 \
+        tzdata && \
     rm -rf /var/lib/apt/lists/*
 
 # python3-opencv 를 파이썬 검색 경로에 영구 추가
@@ -22,31 +28,29 @@ import site, pathlib, glob, os
 site_dir = pathlib.Path(site.getsitepackages()[0])
 site_dir.mkdir(parents=True, exist_ok=True)
 pth = site_dir / 'debian-dist-packages.pth'
-candidates = sorted(set(glob.glob('/usr/lib/python3*/dist-packages')))
-candidates = [p for p in candidates if os.path.isdir(p)]
+candidates = sorted(set(p for p in glob.glob('/usr/lib/python3*/dist-packages') if os.path.isdir(p)))
 pth.write_text('\n'.join(candidates) + '\n')
-print("Wrote", pth, "with:")
-print(pth.read_text())
+print("Wrote", pth, "with:\n" + pth.read_text())
 PY
 
-# 환경변수로도 dist-packages 를 노출
-ENV PYTHONPATH=/usr/lib/python3/dist-packages:/usr/lib/python3.11/dist-packages${PYTHONPATH:+:$PYTHONPATH}
-
-# opencv import 검증
+# opencv import 검증 + 실제 설치 파일 경로 확인
+RUN bash -lc "dpkg -L python3-opencv | grep -E '/cv2($|/)' || true"
 RUN python - <<'PY'
-import sys, site
+import sys, site, os
 print("sys.version=", sys.version)
 print("site.getsitepackages()=", site.getsitepackages())
-print("sys.path has dist-packages ->", [p for p in sys.path if "dist-packages" in p])
+print("sys.path (dist-packages) ->", [p for p in sys.path if "dist-packages" in p])
+print("cv2 dir exists?",
+      any(os.path.exists(os.path.join(p, 'cv2')) for p in sys.path if 'dist-packages' in p))
 import cv2
 print("cv2.__version__=", cv2.__version__)
 print("cv2.__file__=", cv2.__file__)
 PY
 
-COPY requirements.txt ./ 
+COPY requirements.txt ./
 RUN pip install --no-cache-dir -r requirements.txt
 
-# 현재 디렉토리의 중요 파일을 컨테이너의 작업 디렉토리로 복사
+# 소스 복사
 COPY src/ /app/
 
 ENTRYPOINT ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "7340"]
