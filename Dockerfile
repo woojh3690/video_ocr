@@ -15,7 +15,17 @@ RUN apt-get update && \
         libsm6 libxext6 && \
     rm -rf /var/lib/apt/lists/*
 
-# python3-opencv 설치 경로 추가
+# python3-opencv 를 파이썬 검색 경로에 영구 추가
+RUN python - <<'PY'
+import site, pathlib
+pth_dir = pathlib.Path(site.getsitepackages()[0])
+pth_dir.mkdir(parents=True, exist_ok=True)
+pth_file = pth_dir / 'debian-dist-packages.pth'
+pth_file.write_text('/usr/lib/python3/dist-packages')
+print('Added', pth_file, '-> /usr/lib/python3/dist-packages')
+PY
+
+# 환경변수로도 dist-packages 를 노출
 ENV PYTHONPATH=/usr/lib/python3/dist-packages:$PYTHONPATH
 
 COPY requirements.txt ./ 
