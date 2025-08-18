@@ -16,11 +16,17 @@ RUN apt-get update && \
     rm -rf /var/lib/apt/lists/*
 
 # python3-opencv 를 파이썬 검색 경로에 영구 추가
+# /usr/lib/python3*/dist-packages 를 전부 모아 기록 (3.11/3.12 등 어떤 버전이든 커버)
 RUN python - <<'PY'
-import site, pathlib
-pth = pathlib.Path(site.getsitepackages()[0]) / 'debian-dist-packages.pth'
-pth.write_text('/usr/lib/python3/dist-packages\n/usr/lib/python3.11/dist-packages\n')
-print('Wrote', pth, 'with:\n', pth.read_text())
+import site, pathlib, glob, os
+site_dir = pathlib.Path(site.getsitepackages()[0])
+site_dir.mkdir(parents=True, exist_ok=True)
+pth = site_dir / 'debian-dist-packages.pth'
+candidates = sorted(set(glob.glob('/usr/lib/python3*/dist-packages')))
+candidates = [p for p in candidates if os.path.isdir(p)]
+pth.write_text('\n'.join(candidates) + '\n')
+print("Wrote", pth, "with:")
+print(pth.read_text())
 PY
 
 # 환경변수로도 dist-packages 를 노출
