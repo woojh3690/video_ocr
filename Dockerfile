@@ -17,7 +17,8 @@ ENV TZ=Asia/Seoul
 RUN set -eux; \
     apt-get update; \
     apt-get install -y --no-install-recommends \
-        python3 python3-pip python3-opencv \
+        python3 python3-pip python3-venv \
+        python3-opencv \
         ffmpeg \
         libgl1 libglib2.0-0 libsm6 libxext6 \
         tzdata; \
