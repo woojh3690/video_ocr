@@ -8,6 +8,10 @@ WORKDIR /app
 ARG DEBIAN_FRONTEND=noninteractive
 ENV TZ=Asia/Seoul
 
+# 캐시 무효화를 위한 변수(필요시 값만 바꾸면 apt 레이어 다시 실행)
+ARG APT_CACHE_BUST=20250818
+
+# 필수 패키지 설치
 RUN set -eux; \
     echo "APT_CACHE_BUST=${APT_CACHE_BUST}"; \
     apt-get update && \
