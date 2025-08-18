@@ -18,13 +18,24 @@ RUN apt-get update && \
 # python3-opencv 를 파이썬 검색 경로에 영구 추가
 RUN python - <<'PY'
 import site, pathlib
-p = pathlib.Path(site.getsitepackages()[0]) / 'debian-dist-packages.pth'
-p.write_text('/usr/lib/python3/dist-packages\n')
-print('Added', p, '-> /usr/lib/python3/dist-packages')
+pth = pathlib.Path(site.getsitepackages()[0]) / 'debian-dist-packages.pth'
+pth.write_text('/usr/lib/python3/dist-packages\n/usr/lib/python3.11/dist-packages\n')
+print('Wrote', pth, 'with:\n', pth.read_text())
 PY
 
 # 환경변수로도 dist-packages 를 노출
-ENV PYTHONPATH=/usr/lib/python3/dist-packages:$PYTHONPATH
+ENV PYTHONPATH=/usr/lib/python3/dist-packages:/usr/lib/python3.11/dist-packages${PYTHONPATH:+:$PYTHONPATH}
+
+# opencv import 검증
+RUN python - <<'PY'
+import sys, site
+print("sys.version=", sys.version)
+print("site.getsitepackages()=", site.getsitepackages())
+print("sys.path has dist-packages ->", [p for p in sys.path if "dist-packages" in p])
+import cv2
+print("cv2.__version__=", cv2.__version__)
+print("cv2.__file__=", cv2.__file__)
+PY
 
 COPY requirements.txt ./ 
 RUN pip install --no-cache-dir -r requirements.txt
