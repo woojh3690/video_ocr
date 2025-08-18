@@ -24,8 +24,16 @@ RUN set -eux; \
     ln -snf /usr/share/zoneinfo/$TZ /etc/localtime; echo $TZ > /etc/timezone; \
     rm -rf /var/lib/apt/lists/*
 
-# 빌드 타임 즉시 검증: cv2 임포트/버전/파일 경로
-RUN python3 - <<'PY'
+# venv 생성(+ 시스템 site-packages 사용하여 cv2 바로 보이게)
+RUN python3 -m venv --system-site-packages /opt/venv && \
+    /opt/venv/bin/python -m pip install --upgrade pip wheel setuptools
+
+# 런타임이 venv를 기본으로 쓰도록 PATH 설정
+ENV VIRTUAL_ENV=/opt/venv
+ENV PATH="/opt/venv/bin:${PATH}"
+
+# (옵션) 빌드 타임 검증: venv 파이썬에서 cv2 임포트 확인
+RUN python - <<'PY'
 import sys, cv2
 print("sys.version=", sys.version)
 print("cv2.__version__=", cv2.__version__)
@@ -34,10 +42,10 @@ PY
 
 # 파이썬 의존성 설치 (캐시 효율을 위해 requirements 먼저 복사)
 COPY requirements.txt ./
-RUN python3 -m pip install --no-cache-dir -r requirements.txt
+RUN pip install --no-cache-dir -r requirements.txt
 
 # 애플리케이션 코드
 COPY src/ /app/
 
-# 실행(시스템 파이썬 사용: 브리지 불필요)
-ENTRYPOINT ["python3", "-m", "uvicorn", "main:app", "--host", "0.0.0.0", "--port", "7340"]
+# 실행 (venv의 uvicorn 사용)
+ENTRYPOINT ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "7340"]
