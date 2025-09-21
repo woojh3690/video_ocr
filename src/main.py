@@ -22,6 +22,7 @@ from fastapi.responses import HTMLResponse, StreamingResponse, FileResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from kafka import KafkaProducer
+from docker.errors import APIError, DockerException
 
 from core.ocr import process_ocr, UPLOAD_DIR, base_url
 from core.docker_manager import DockerManager
@@ -303,36 +304,51 @@ async def start_ocr_endpoint(
 async def run_ocr_task(task_id, video_filename, x, y, width, height, start_time, end_time):
     print(f"[시작] {task_id} - {video_filename}")
 
-    # 작업을 실행하기 전에 vLLM 컨테이너가 실행 중인지 확인하고, 필요시 시작합니다.
-    if not await is_vllm_health():
-        print("vLLM 서버가 준비되지 않았습니다. 컨테이너를 시작합니다.")
-        docker_manager.start_container(docker_name)
-
-    # vLLM 서버가 준비될 때까지 대기
-    while not await is_vllm_health():
-        await asyncio.sleep(5)
-    print("vLLM 서버가 준비되었습니다.")
-
     task = tasks[task_id]
-    task.status = Status.running
-    task.task_start_time = None
-    await broadcast_update(task)
+
     try:
+        # Ensure the vLLM container is running; start it if needed.
+        if not await is_vllm_health():
+            print("vLLM 서버가 준비되지 않았습니다. 컨테이너를 시작합니다.")
+            try:
+                docker_manager.start_container(docker_name)
+            except (APIError, DockerException) as e:
+                error_detail = getattr(e, "explanation", None) or str(e)
+                task.status = Status.failed
+                task.error = f"Docker 컨테이너 시작 실패: {error_detail}"
+                await broadcast_update(task)
+                print(f"Docker 컨테이너 시작 실패: {error_detail}")
+                return
+            except Exception as e:
+                task.status = Status.failed
+                task.error = f"컨테이너 시작 중 알 수 없는 오류: {e}"
+                await broadcast_update(task)
+                print("컨테이너 시작 중 알 수 없는 오류:", e)
+                return
+
+        # Wait until the vLLM server becomes healthy.
+        while not await is_vllm_health():
+            await asyncio.sleep(5)
+        print("vLLM 서버가 준비되었습니다.")
+
+        task.status = Status.running
+        task.task_start_time = None
+        await broadcast_update(task)
         async for progress in process_ocr(video_filename, x, y, width, height, start_time, end_time):
-            # 취소 요청이 들어왔는지 확인
+            # Check if cancellation was requested.
             if task.status == Status.cancelling:
                 task.status = Status.cancelled
                 await broadcast_update(task)
-                return  # 작업 중지
+                return  # 작업 중단
 
             try:
                 task.progress = progress
                 task.estimated_completion = calculate_estimated_completion(task_id)
                 await broadcast_update(task)
             except Exception as e:
-                print("Progress message 처리 중 에러:", e)
+                print("Progress message 처리 오류:", e)
 
-        # OCR 작업 정상 완료 시
+        # Handle successful OCR completion.
         task.status = Status.completed
         filename_without_ext = os.path.splitext(os.path.basename(video_filename))[0]
         srt_path = os.path.join(UPLOAD_DIR, f"{filename_without_ext}.srt")
@@ -345,12 +361,13 @@ async def run_ocr_task(task_id, video_filename, x, y, width, height, start_time,
     except Exception as e:
         task.status = Status.failed
         task.error = str(e)
-        print("OCR 작업 중 에러:", e)
+        print("OCR 작업 오류:", e)
         traceback.print_exc()
         await broadcast_update(task)
     finally:
-        # 작업 종료 후 다음 작업 실행
+        # Kick off the next task after finishing the current one.
         await start_next_task()
+
 
 async def start_next_task():
     """대기 상태인 다음 작업이 있으면 실행합니다."""
