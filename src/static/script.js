@@ -80,8 +80,15 @@ function loadDirectory(path = '') {
             fileList.innerHTML = '';
             if (currentPath) {
                 const up = document.createElement('li');
-                up.className = 'list-group-item list-group-item-action';
-                up.textContent = '..';
+                up.className = 'list-group-item list-group-item-action browser-item';
+                const upIcon = document.createElement('span');
+                upIcon.className = 'item-icon';
+                upIcon.textContent = '\u2191';
+                const upLabel = document.createElement('span');
+                upLabel.className = 'item-label';
+                upLabel.textContent = '..';
+                up.appendChild(upIcon);
+                up.appendChild(upLabel);
                 up.onclick = () => {
                     const parts = currentPath.split('/');
                     parts.pop();
@@ -91,8 +98,15 @@ function loadDirectory(path = '') {
             }
             data.entries.forEach(entry => {
                 const item = document.createElement('li');
-                item.className = 'list-group-item list-group-item-action';
-                item.textContent = entry.name + (entry.is_dir ? '/' : '');
+                item.className = 'list-group-item list-group-item-action browser-item';
+                const icon = document.createElement('span');
+                icon.className = 'item-icon';
+                icon.textContent = entry.is_dir ? '\uD83D\uDCC1' : '\uD83D\uDCC4';
+                const label = document.createElement('span');
+                label.className = 'item-label';
+                label.textContent = entry.name + (entry.is_dir ? '/' : '');
+                item.appendChild(icon);
+                item.appendChild(label);
                 if (entry.is_dir) {
                     item.onclick = () => {
                         loadDirectory(currentPath ? `${currentPath}/${entry.name}` : entry.name);
