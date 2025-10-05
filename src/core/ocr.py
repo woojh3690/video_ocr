@@ -3,6 +3,7 @@ import csv
 import json
 import base64
 import asyncio
+import unicodedata
 from pathlib import Path
 from heapq import heappush, heappop
 from typing import List, Generator
@@ -15,7 +16,7 @@ from langdetect import detect
 from langdetect.lang_detect_exception import LangDetectException
 import random
 
-from core.merging_module import normalize_text, merge_ocr_texts
+from core.csv_to_srt import normalize_text as collapse_whitespace, convert_csv_to_srt
 
 UPLOAD_DIR = "uploads"
 
@@ -29,6 +30,18 @@ OCR all the text from image following JSON:
 If there is no other text from image then:
 {"texts":""}
 """
+
+BRACKET_CHARS = "[](){}<>「」『』〈〉《》"
+
+def strip_outer_brackets(text: str) -> str:
+    return text.strip(BRACKET_CHARS)
+
+def clean_ocr_text(text: str) -> str:
+    if not text:
+        return ""
+    normalized = unicodedata.normalize("NFKC", text)
+    normalized = strip_outer_brackets(normalized)
+    return collapse_whitespace(normalized)
 
 class OcrSubtitleGroup(BaseModel):
     texts: str
@@ -51,13 +64,6 @@ def get_last_processed_frame_number(csv_path, fieldnames) -> int:
     return last_frame_number
 
 # 시간을 포맷팅
-def format_time(seconds):
-    hours = int(seconds // 3600)
-    minutes = int((seconds % 3600) // 60)
-    secs = int(seconds % 60)
-    millis = int((seconds - int(seconds)) * 1000)
-    return f"{hours:02}:{minutes:02}:{secs:02},{millis:03}"
-
 # 동영상 파일에서 프레임을 배치 단위로 생성하는 제너레이터.
 def frame_batch_generator(
     cap: cv2.VideoCapture,
@@ -186,7 +192,7 @@ async def process_ocr(
             #  heap 안에 다음 프레임이 있으면 순서대로 기록
             while heap and heap[0][0] == next_frame_to_write:
                 fn, ocr_text = heappop(heap)
-                ocr_text = normalize_text(ocr_text)  # 불필요한 대괄호 제거
+                ocr_text = clean_ocr_text(ocr_text)  # 불필요한 대괄호 제거
                 if ocr_text:
                     print(ocr_text)
                 writer.writerow({
@@ -207,6 +213,7 @@ async def process_ocr(
         # heap 잔여 결과 정리
         while heap:
             fn, ocr_text = heappop(heap)
+            ocr_text = clean_ocr_text(ocr_text)
             writer.writerow({
                 "frame_number": fn,
                 "time": round(fn / frame_rate, 3),
@@ -217,47 +224,29 @@ async def process_ocr(
         # 진행 상황 업데이트
         yield 100
 
-    # OCR 완료된 CSV 파일 읽기
-    ocr_text_data = []
+    # OCR 완료 후 CSV 파일 읽기
+    non_empty_texts: List[str] = []
     with open(csv_path, 'r', encoding='utf-8') as csvfile:
         for row in csv.DictReader(csvfile):
-            ocr_text_data.append({
-                'frame_number': row['frame_number'],
-                'time': float(row['time']),
-                'text': row['text'],
-            })
+            text_value = row['text']
+            if text_value and text_value.strip():
+                non_empty_texts.append(text_value.strip())
 
-    # 언어 감지 및 자막 저장 경로 설정
-    langs = []
-    non_empty_entries = [entry for entry in ocr_text_data if entry['text'].strip()]
-    
-    # Only proceed with sampling if there are non-empty entries
-    if non_empty_entries:
-        sample_size = min(100, len(non_empty_entries))
-        samples = random.sample(non_empty_entries, sample_size)
-        
-        for entry in samples:
-            text_content = entry['text'].strip()
+    # 언어 감지 및 자막 경로 결정
+    langs: List[str] = []
+    if non_empty_texts:
+        sample_size = min(100, len(non_empty_texts))
+        for text_content in random.sample(non_empty_texts, sample_size):
             try:
-                lang_detected = detect(text_content)
-                langs.append(lang_detected)
+                langs.append(detect(text_content))
             except LangDetectException:
-                pass
+                continue
     most_common_lang = Counter(langs).most_common(1)[0][0] if langs else "un"
-    srt_path = str(video_path_obj.parent / (video_path_obj.with_suffix('').name + f".{most_common_lang}.srt"))
 
-    # 텍스트 병합 모듈 사용
-    ocr_progress_data = merge_ocr_texts(ocr_text_data)
+    csv_path_obj = Path(csv_path)
+    srt_path = csv_path_obj.with_suffix(f".{most_common_lang}.srt")
 
-    # 자막 파일 생성
-    with open(srt_path, 'w', encoding='utf-8') as f:
-        for idx, subtitle in enumerate(ocr_progress_data, start=1):
-            start = format_time(subtitle.start_time)
-            end = format_time(subtitle.end_time)
-            subtitle_line = subtitle.text.replace("\\n", "\n")
-            f.write(f"{idx}\n")
-            f.write(f"{start} --> {end}\n")
-            f.write(f"{subtitle_line}\n\n")
+    convert_csv_to_srt(csv_path_obj, srt_path)
 
     # 진행 상황 100%로 업데이트
     yield 100

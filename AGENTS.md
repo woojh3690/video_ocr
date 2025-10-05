@@ -2,7 +2,7 @@
 
 ## Project Structure & Module Organization
 - `src/main.py`: FastAPI app (routes, websocket, task queue, video streaming).
-- `src/core/`: OCR pipeline and helpers (`ocr.py`, `merging_module.py`, `docker_manager.py`).
+- `src/core/`: OCR pipeline and helpers (`ocr.py`, `csv_to_srt.py`, `docker_manager.py`).
 - `src/templates/` and `src/static/`: Jinja2 templates and assets.
 - `src/uploads/`: Uploaded videos and outputs (served via `/videos/...`).
 - `test/`: Test data (e.g., `test_image/`). No formal unit tests yet.
