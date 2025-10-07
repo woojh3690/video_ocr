@@ -93,6 +93,10 @@ body {
     color: #000;
 }
 
+body.settings-page {
+    background-color: #f5f7fb;
+}
+
 #file-browser {
     border: 2px dashed #ccc;
     padding: 10px;
@@ -144,13 +148,92 @@ body {
     .list-group-item:hover {
         background-color: #444;
         color: #ffffff;
-}
+    }
 
+    body.settings-page {
+        background-color: #0f1117;
+        color: #e4e7f1;
+    }
+
+    body.settings-page .settings-card {
+        background-color: #1a1d24 !important;
+        border-color: #2c3242;
+        color: #e4e7f1;
+    }
+
+    body.settings-page .settings-section-title {
+        color: #f0f3ff;
+    }
+
+    body.settings-page .form-control {
+        background-color: #10131c;
+        border-color: #2c3242;
+        color: #e4e7f1;
+    }
+
+    body.settings-page .form-control::placeholder {
+        color: #7d8597;
+    }
+
+    body.settings-page .form-text.text-muted,
+    body.settings-page .kafka-hint {
+        color: #9aa4be;
+    }
+
+    body.settings-page .custom-control-label::before {
+        background-color: #10131c;
+        border-color: #2c3242;
+    }
+
+    body.settings-page .custom-control-input:checked ~ .custom-control-label::before {
+        background-color: #3b82f6;
+        border-color: #3b82f6;
+    }
+
+    body.settings-page .alert {
+        background-color: rgba(59, 130, 246, 0.12);
+        border-color: rgba(59, 130, 246, 0.35);
+        color: #d5e2ff;
+    }
+
+    body.settings-page .alert.alert-danger {
+        background-color: rgba(248, 113, 113, 0.12);
+        border-color: rgba(248, 113, 113, 0.35);
+        color: #ffc9c9;
+    }
+
+    body.settings-page .alert.alert-warning {
+        background-color: rgba(234, 179, 8, 0.12);
+        border-color: rgba(234, 179, 8, 0.35);
+        color: #ffe8a3;
+    }
+
+    body.settings-page .btn.btn-outline-secondary {
+        color: #e4e7f1;
+        border-color: #3a3f4f;
+    }
+
+    body.settings-page .btn.btn-outline-secondary:hover {
+        background-color: #3a3f4f;
+        color: #ffffff;
+    }
+
+    body.settings-page .btn.btn-primary {
+        background-color: #3b82f6;
+        border-color: #3b82f6;
+    }
+
+    body.settings-page .btn.btn-primary:hover {
+        background-color: #2563eb;
+        border-color: #2563eb;
+    }
 }
 
 .settings-card {
     max-width: 860px;
     margin: 0 auto;
+    background-color: #ffffff;
+    border: 1px solid #e2e6ef;
 }
 
 .settings-section-title {
