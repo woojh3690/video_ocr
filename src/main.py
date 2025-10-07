@@ -23,7 +23,7 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from kafka import KafkaProducer
 from docker.errors import APIError, DockerException
-from pydantic import BaseModel, ValidationError
+from pydantic import BaseModel, ValidationError, ConfigDict
 
 from core.ocr import process_ocr, UPLOAD_DIR
 from core.docker_manager import DockerManager
@@ -64,10 +64,7 @@ class SettingsUpdateRequest(BaseModel):
     llm_base_url: Optional[str] = None
     llm_model: Optional[str] = None
 
-    class Config:
-        extra = "forbid"
-
-    model_config = {"extra": "forbid"}
+    model_config = ConfigDict(extra="forbid")
 
 current_settings: AppSettings = settings_manager.get_settings()
 docker_manager: DockerManager
@@ -231,12 +228,12 @@ async def read_settings_page(request: Request):
 @app.get("/api/settings")
 async def get_settings_api():
     settings = settings_manager.get_settings()
-    return settings.dict()
+    return settings.model_dump()
 
 
 @app.put("/api/settings")
 async def update_settings_api(payload: SettingsUpdateRequest):
-    updates = payload.dict(exclude_unset=True)
+    updates = payload.model_dump(exclude_unset=True)
     kafka_enabled = updates.get("kafka_enabled")
     if kafka_enabled is None:
         kafka_enabled = current_settings.kafka_enabled
@@ -252,7 +249,7 @@ async def update_settings_api(payload: SettingsUpdateRequest):
         raise HTTPException(status_code=500, detail=f"설정을 저장할 수 없습니다: {exc}") from exc
 
     apply_runtime_settings(new_settings)
-    return new_settings.dict()
+    return new_settings.model_dump()
 
 async def is_vllm_health():
     """Check if vllm server is reachable"""

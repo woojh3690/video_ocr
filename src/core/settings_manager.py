@@ -3,7 +3,7 @@ from pathlib import Path
 from threading import Lock
 from typing import Optional
 
-from pydantic import BaseModel, ValidationError, Field
+from pydantic import BaseModel, ValidationError, Field, ConfigDict
 
 
 DEFAULT_SETTINGS = {
@@ -24,14 +24,13 @@ class AppSettings(BaseModel):
     llm_base_url: Optional[str] = Field(default=DEFAULT_SETTINGS["llm_base_url"])
     llm_model: str = Field(default=DEFAULT_SETTINGS["llm_model"])
 
-    class Config:
-        validate_assignment = True
+    model_config = ConfigDict(validate_assignment=True)
 
     def normalized(self) -> "AppSettings":
         """
         Return a copy of the settings with trimmed string fields.
         """
-        data = self.dict()
+        data = self.model_dump()
         for key, value in data.items():
             if isinstance(value, str):
                 data[key] = value.strip()
@@ -66,7 +65,7 @@ class SettingsManager:
         return settings
 
     def _write_to_disk(self, settings: AppSettings) -> None:
-        payload = settings.dict()
+        payload = settings.model_dump()
         self._settings_path.write_text(
             json.dumps(payload, indent=2, ensure_ascii=True),
             encoding="utf-8",
@@ -74,7 +73,7 @@ class SettingsManager:
 
     def get_settings(self) -> AppSettings:
         with self._lock:
-            return self._settings.copy(deep=True)
+            return self._settings.model_copy(deep=True)
 
     def reload(self) -> AppSettings:
         with self._lock:
@@ -83,7 +82,7 @@ class SettingsManager:
 
     def update(self, **updates) -> AppSettings:
         with self._lock:
-            data = self._settings.dict()
+            data = self._settings.model_dump()
             data.update(updates)
             new_settings = AppSettings(**data).normalized()
             self._write_to_disk(new_settings)
