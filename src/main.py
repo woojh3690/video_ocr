@@ -23,9 +23,11 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from kafka import KafkaProducer
 from docker.errors import APIError, DockerException
+from pydantic import BaseModel, ValidationError
 
-from core.ocr import process_ocr, UPLOAD_DIR, base_url
+from core.ocr import process_ocr, UPLOAD_DIR
 from core.docker_manager import DockerManager
+from core.settings_manager import AppSettings, settings_manager
 
 class Status(str, Enum):
     waiting = "waiting"
@@ -53,18 +55,79 @@ class Task:
     result: Optional[str] = None
     error: Optional[str] = None
 
-docker_url: str = os.getenv("DOCKER_URL", "tcp://192.168.1.63:2375")
-docker_name: str = os.getenv("DOCKER_NAME", "vllm_7b")
 
-producer = KafkaProducer(
-    acks=0, 
-    compression_type="gzip", 
-    bootstrap_servers=[os.getenv("KAFKA_URL", "192.168.1.17:19092")], 
-    value_serializer=lambda x: dumps(x).encode("utf-8")
-)
+class SettingsUpdateRequest(BaseModel):
+    docker_url: Optional[str] = None
+    docker_name: Optional[str] = None
+    kafka_enabled: Optional[bool] = None
+    kafka_url: Optional[str] = None
+    llm_base_url: Optional[str] = None
+    llm_model: Optional[str] = None
+
+    class Config:
+        extra = "forbid"
+
+    model_config = {"extra": "forbid"}
+
+current_settings: AppSettings = settings_manager.get_settings()
+docker_manager: DockerManager
+kafka_producer: Optional[KafkaProducer] = None
+docker_name: str = current_settings.docker_name
+
+
+def create_kafka_producer(settings: AppSettings) -> Optional[KafkaProducer]:
+    if not settings.kafka_enabled:
+        return None
+    try:
+        return KafkaProducer(
+            acks=0,
+            compression_type="gzip",
+            bootstrap_servers=[settings.kafka_url],
+            value_serializer=lambda x: dumps(x).encode("utf-8"),
+        )
+    except Exception as exc:
+        print("KafkaProducer 초기화 실패:", exc)
+        return None
+
+
+def apply_runtime_settings(settings: AppSettings) -> None:
+    global docker_manager, kafka_producer, docker_name, current_settings
+
+    current_settings = settings
+    docker_name = settings.docker_name
+    docker_manager = DockerManager(settings.docker_url)
+
+    if kafka_producer is not None:
+        try:
+            kafka_producer.close()
+        except Exception:
+            pass
+
+    kafka_producer = create_kafka_producer(settings)
+
+
+def publish_kafka_message(topic: str, payload: dict) -> None:
+    if kafka_producer is None:
+        return
+    try:
+        kafka_producer.send(topic, payload)
+    except Exception as exc:
+        print("Kafka 메시지 전송 실패:", exc)
+
+
+def shutdown_runtime_services() -> None:
+    if kafka_producer is None:
+        return
+    try:
+        kafka_producer.flush()
+        kafka_producer.close()
+    except Exception:
+        pass
+
+
+apply_runtime_settings(current_settings)
 
 app = FastAPI()
-docker_manager = DockerManager(docker_url)
 
 # 업로드된 비디오 파일 저장 경로
 if not os.path.exists(UPLOAD_DIR):
@@ -135,12 +198,14 @@ def save_tasks():
     except Exception as e:
         print("tasks 저장 중 오류 발생:", e)
 
-# atexit를 사용해 프로그램 종료 시 자동 저장
+# atexit를 사용해 프로그램 종료 시 자동 저장 및 리소스 정리
+atexit.register(shutdown_runtime_services)
 atexit.register(save_tasks)
 
 def handle_termination(signum, frame):
     print(f"종료 시그널({signum}) 수신 - tasks 저장 중...")
     save_tasks()
+    shutdown_runtime_services()
     sys.exit(0)
 
 for sig in (signal.SIGINT, signal.SIGTERM):
@@ -157,9 +222,42 @@ templates = Jinja2Templates(directory="templates")
 async def read_root(request: Request):
     return templates.TemplateResponse("index.html", {"request": request})
 
+
+@app.get("/settings", response_class=HTMLResponse)
+async def read_settings_page(request: Request):
+    return templates.TemplateResponse("settings.html", {"request": request})
+
+
+@app.get("/api/settings")
+async def get_settings_api():
+    settings = settings_manager.get_settings()
+    return settings.dict()
+
+
+@app.put("/api/settings")
+async def update_settings_api(payload: SettingsUpdateRequest):
+    updates = payload.dict(exclude_unset=True)
+    kafka_enabled = updates.get("kafka_enabled")
+    if kafka_enabled is None:
+        kafka_enabled = current_settings.kafka_enabled
+    if kafka_enabled:
+        kafka_url_value = updates.get("kafka_url", current_settings.kafka_url)
+        if not kafka_url_value or not kafka_url_value.strip():
+            raise HTTPException(status_code=400, detail="Kafka URL을 입력해주세요.")
+    try:
+        new_settings = settings_manager.update(**updates)
+    except ValidationError as exc:
+        raise HTTPException(status_code=400, detail=exc.errors())
+    except OSError as exc:
+        raise HTTPException(status_code=500, detail=f"설정을 저장할 수 없습니다: {exc}") from exc
+
+    apply_runtime_settings(new_settings)
+    return new_settings.dict()
+
 async def is_vllm_health():
     """Check if vllm server is reachable"""
-    client = openai.AsyncOpenAI(base_url=base_url, api_key="dummy_key")
+    settings = current_settings
+    client = openai.AsyncOpenAI(base_url=settings.llm_base_url or None, api_key="dummy_key")
     try:
         await client.models.list()
         return True
@@ -353,7 +451,7 @@ async def run_ocr_task(task_id, video_filename, x, y, width, height, start_time,
         filename_without_ext = os.path.splitext(os.path.basename(video_filename))[0]
         srt_path = os.path.join(UPLOAD_DIR, f"{filename_without_ext}.srt")
         task.result = srt_path if os.path.exists(srt_path) else None
-        producer.send("discord_bot", {
+        publish_kafka_message("discord_bot", {
             "type": "msg",
             "msg": f"{video_filename} OCR 완료."
         })
@@ -531,4 +629,3 @@ async def websocket_endpoint(websocket: WebSocket):
     except WebSocketDisconnect:
         if websocket in global_websocket_connections:
             global_websocket_connections.remove(websocket)
-

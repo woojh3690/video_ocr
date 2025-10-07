@@ -144,6 +144,34 @@ body {
     .list-group-item:hover {
         background-color: #444;
         color: #ffffff;
-    }
+}
 
+}
+
+.settings-card {
+    max-width: 860px;
+    margin: 0 auto;
+}
+
+.settings-section-title {
+    font-weight: 600;
+    color: #343a40;
+    margin-bottom: 1rem;
+}
+
+.disabled-field {
+    opacity: 0.55;
+}
+
+#settings-feedback {
+    max-width: 860px;
+    margin: 0 auto 1.5rem;
+}
+
+.kafka-hint {
+    transition: opacity .2s ease;
+}
+
+.disabled-field .kafka-hint {
+    opacity: 0.65;
 }

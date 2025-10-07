@@ -17,11 +17,9 @@ from langdetect.lang_detect_exception import LangDetectException
 import random
 
 from core.csv_to_srt import normalize_text as collapse_whitespace, convert_csv_to_srt
+from core.settings_manager import get_settings
 
 UPLOAD_DIR = "uploads"
-
-base_url: str | None = os.getenv("LLM_BASE_URL")
-llm_model: str = os.getenv("LLM_MODEL", "Qwen/Qwen2.5-VL-3B-Instruct")
 
 system_prompt = """
 OCR all the text from image following JSON:
@@ -95,6 +93,7 @@ async def ocr_one_frame(
     client: openai.AsyncOpenAI,
     frame_number: int,
     img_base64: str,
+    llm_model: str,
 ) -> tuple[int, str]:            # (frame_number, ocr_text) 반환
     messages = [
         {"role": "system", "content": system_prompt},
@@ -155,7 +154,8 @@ async def process_ocr(
     cap.set(cv2.CAP_PROP_POS_FRAMES, start_ocr_frame) 
 
     # ollama 클라이언트 초기화
-    client = openai.AsyncOpenAI(base_url=base_url, api_key="dummy_key")
+    settings = get_settings()
+    client = openai.AsyncOpenAI(base_url=settings.llm_base_url or None, api_key="dummy_key")
 
     # vllm 서버가 실행 중인지 확인
     try:
@@ -178,7 +178,7 @@ async def process_ocr(
         for frame_number, img_b64 in frame_batch_generator(cap, x, y, width, height, end_frame):
 
             # 새 태스크 추가
-            task = asyncio.create_task(ocr_one_frame(client, frame_number, img_b64))
+            task = asyncio.create_task(ocr_one_frame(client, frame_number, img_b64, settings.llm_model))
             running.add(task)
 
             #  태스크 수가 N를 초과하지 않도록 완료될 때까지 대기

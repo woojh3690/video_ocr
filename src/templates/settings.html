@@ -1,0 +1,81 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="utf-8">
+    <title>환경 설정 | Video OCR</title>
+    <link id="favicon" rel="icon" type="image/x-icon" href="/static/favicon.ico">
+    <link rel="stylesheet" href="https://stackpath.bootstrapcdn.com/bootstrap/4.5.0/css/bootstrap.min.css">
+    <link rel="stylesheet" href="/static/style.css">
+</head>
+<body class="bg-light">
+    <div class="container py-5">
+        <div class="d-flex align-items-center justify-content-between mb-4">
+            <div>
+                <h1 class="mb-1">환경 설정</h1>
+                <p class="text-muted mb-0">컨테이너, LLM, Kafka 연결을 한눈에 관리하세요.</p>
+            </div>
+            <a href="/" class="btn btn-outline-secondary">
+                &larr; 작업 대시보드
+            </a>
+        </div>
+
+        <div id="settings-feedback" class="alert d-none" role="alert"></div>
+
+        <form id="settings-form" class="settings-card shadow-sm bg-white rounded p-4">
+            <section class="mb-4">
+                <h5 class="settings-section-title">Docker</h5>
+                <div class="form-row">
+                    <div class="form-group col-md-6">
+                        <label for="docker-url">Docker 엔드포인트</label>
+                        <input type="text" id="docker-url" class="form-control" placeholder="tcp://127.0.0.1:2375" required>
+                        <small class="form-text text-muted">Docker 데몬 API URL</small>
+                    </div>
+                    <div class="form-group col-md-6">
+                        <label for="docker-name">컨테이너 이름</label>
+                        <input type="text" id="docker-name" class="form-control" placeholder="vllm_7b" required>
+                        <small class="form-text text-muted">vLLM을 실행할 컨테이너 이름</small>
+                    </div>
+                </div>
+            </section>
+
+            <section class="mb-4">
+                <h5 class="settings-section-title">LLM</h5>
+                <div class="form-row">
+                    <div class="form-group col-md-6">
+                        <label for="llm-base-url">LLM Base URL</label>
+                        <input type="text" id="llm-base-url" class="form-control" placeholder="http://127.0.0.1:8000">
+                        <small class="form-text text-muted">비워두면 기본 OpenAI 엔드포인트를 사용합니다.</small>
+                    </div>
+                    <div class="form-group col-md-6">
+                        <label for="llm-model">LLM 모델</label>
+                        <input type="text" id="llm-model" class="form-control" placeholder="Qwen/Qwen2.5-VL-3B-Instruct" required>
+                    </div>
+                </div>
+            </section>
+
+            <section class="mb-4">
+                <h5 class="settings-section-title d-flex align-items-center justify-content-between">
+                    <span>Kafka</span>
+                    <div class="custom-control custom-switch">
+                        <input type="checkbox" class="custom-control-input" id="kafka-enabled">
+                        <label class="custom-control-label" for="kafka-enabled">Kafka 사용</label>
+                    </div>
+                </h5>
+                <div class="form-group">
+                    <label for="kafka-url">Kafka Bootstrap 서버</label>
+                    <input type="text" id="kafka-url" class="form-control" placeholder="192.168.1.17:19092">
+                    <small class="form-text text-muted kafka-hint">Kafka 알림을 보내고 싶을 때 활성화하세요.</small>
+                </div>
+            </section>
+
+            <div class="d-flex align-items-center justify-content-end">
+                <button type="submit" class="btn btn-primary px-4" id="save-button">
+                    변경 사항 저장
+                </button>
+            </div>
+        </form>
+    </div>
+
+    <script src="/static/settings.js"></script>
+</body>
+</html>
