@@ -223,7 +223,7 @@ function updateTaskRow(task) {
         row = document.createElement("tr");
         row.id = "task-row-" + taskId;
         row.innerHTML = `
-            <td class="video-file">${videoFile}</td>
+            <td class="video-file"></td>
             <td class="progress-cell">
                 <div class="progress">
                     <div class="progress-bar" role="progressbar" style="width: ${progress}%;" aria-valuenow="${progress}" aria-valuemin="0" aria-valuemax="100"></div>
@@ -233,12 +233,17 @@ function updateTaskRow(task) {
             <td class="estimated-cell">${estimated}</td>
             <td class="action-cell"></td>
         `;
+        const videoCell = row.querySelector('.video-file');
+        videoCell.textContent = videoFile;
+        videoCell.title = videoFile;
         taskListTableBody.appendChild(row);
         setActionButtons(row, status, taskId);
         updateRunningStatus(taskId, status);
     } else {
         // 기존 row가 있으면 변경된 부분만 업데이트
-        row.querySelector('.video-file').innerText = videoFile;
+        const videoCell = row.querySelector('.video-file');
+        videoCell.textContent = videoFile;
+        videoCell.title = videoFile;
 
         let progressBar = row.querySelector('.progress-bar');
         progressBar.style.width = `${progress}%`;
