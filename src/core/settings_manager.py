@@ -7,12 +7,12 @@ from pydantic import BaseModel, ValidationError, Field, ConfigDict
 
 
 DEFAULT_SETTINGS = {
-    "docker_url": "tcp://192.168.1.63:2375",
-    "docker_name": "vllm_7b",
+    "docker_url": "tcp://192.168.0.3:2375",
+    "docker_name": "vllm_30b",
     "kafka_enabled": False,
-    "kafka_url": "192.168.1.17:19092",
+    "kafka_url": "192.168.0.2:19092",
     "llm_base_url": None,
-    "llm_model": "Qwen/Qwen2.5-VL-3B-Instruct",
+    "llm_model": "Qwen/Qwen3-VL-30B-A3B-Instruct-FP8",
 }
 
 
