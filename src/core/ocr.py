@@ -30,7 +30,10 @@ If there is no other text from image then:
 """
 
 BRACKET_CHARS = "[](){}<>「」『』〈〉《》"
-
+BRACKET_PAIRS = {
+    BRACKET_CHARS[i]: BRACKET_CHARS[i + 1]
+    for i in range(0, len(BRACKET_CHARS), 2)
+}
 
 class OcrProcessingError(RuntimeError):
     """Raised when OCR on a frame fails unexpectedly."""
@@ -43,7 +46,15 @@ class OcrProcessingError(RuntimeError):
 
 
 def strip_outer_brackets(text: str) -> str:
-    return text.strip(BRACKET_CHARS)
+    """Strip text only when a matching bracket pair wraps both ends."""
+    result = text
+    while len(result) > 1:
+        opening = result[0]
+        closing = BRACKET_PAIRS.get(opening)
+        if not closing or result[-1] != closing:
+            break
+        result = result[1:-1]
+    return result
 
 def clean_ocr_text(text: str) -> str:
     if not text:
