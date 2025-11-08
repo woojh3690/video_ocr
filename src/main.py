@@ -25,7 +25,7 @@ from kafka import KafkaProducer
 from docker.errors import APIError, DockerException
 from pydantic import BaseModel, ValidationError, ConfigDict
 
-from core.ocr import process_ocr, UPLOAD_DIR
+from core.ocr import process_ocr, UPLOAD_DIR, OcrProcessingError
 from core.docker_manager import DockerManager
 from core.settings_manager import AppSettings, settings_manager
 
@@ -34,6 +34,7 @@ class Status(str, Enum):
     running = "running"
     completed = "completed"
     failed = "failed"
+    error = "error"
     cancelling = "cancelling"
     cancelled = "cancelled"
 
@@ -452,6 +453,12 @@ async def run_ocr_task(task_id, video_filename, x, y, width, height, start_time,
             "type": "msg",
             "msg": f"{video_filename} OCR 완료."
         })
+        await broadcast_update(task)
+    except OcrProcessingError as e:
+        task.status = Status.error
+        task.error = str(e)
+        print("OCR 프레임 처리 중 오류:", e)
+        traceback.print_exc()
         await broadcast_update(task)
     except Exception as e:
         task.status = Status.failed

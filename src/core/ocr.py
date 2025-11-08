@@ -31,6 +31,17 @@ If there is no other text from image then:
 
 BRACKET_CHARS = "[](){}<>「」『』〈〉《》"
 
+
+class OcrProcessingError(RuntimeError):
+    """Raised when OCR on a frame fails unexpectedly."""
+
+    def __init__(self, frame_number: int, original_exception: Exception):
+        self.frame_number = frame_number
+        self.original_exception = original_exception
+        message = f"프레임 {frame_number} OCR 중 예기치 못한 오류: {original_exception}"
+        super().__init__(message)
+
+
 def strip_outer_brackets(text: str) -> str:
     return text.strip(BRACKET_CHARS)
 
@@ -118,9 +129,9 @@ async def ocr_one_frame(
         print(f"[Warn] 프레임 {frame_number} OCR 중 예외 발생: {e!r}")
         ocr_text = ""
     except Exception as e:
-        # 혹시 다른 예외도 잡고 싶으면 여기에 추가
-        print(f"[Error] 예기치 못한 오류 (frame {frame_number}): {e!r}")
-        ocr_text = ""
+        error = OcrProcessingError(frame_number, e)
+        print(f"[Error] {error}")
+        raise error
     return frame_number, ocr_text
     
 async def process_ocr(
@@ -142,6 +153,7 @@ async def process_ocr(
     # 영상 정보 추출
     cap = cv2.VideoCapture(video_path)
     if not cap.isOpened():
+        cap.release()
         raise ValueError(f"Cannot open video file: {video_path}")
     frame_rate = cap.get(cv2.CAP_PROP_FPS) # 초당 프레임 수
     start_frame = int(start_time * frame_rate) # OCR 시작 프레임
@@ -151,78 +163,112 @@ async def process_ocr(
 
     # OCR 을 진행할 프레임으로 이동 
     start_ocr_frame = max(start_frame, last_frame_number)
-    cap.set(cv2.CAP_PROP_POS_FRAMES, start_ocr_frame) 
+    cap.set(cv2.CAP_PROP_POS_FRAMES, start_ocr_frame)
+
+    running: set[asyncio.Task] = set()
+
+    async def cancel_running_tasks():
+        if not running:
+            return
+        for task in list(running):
+            task.cancel()
+        await asyncio.gather(*running, return_exceptions=True)
+        running.clear()
 
     # ollama 클라이언트 초기화
     settings = get_settings()
     client = openai.AsyncOpenAI(base_url=settings.llm_base_url or None, api_key="dummy_key")
 
-    # vllm 서버가 실행 중인지 확인
     try:
-        await client.models.list()
-    except openai.APIConnectionError:
-        raise RuntimeError("vllm 서버가 실행 중인지 확인해주세요.")
+        # vllm 서버가 실행 중인지 확인
+        try:
+            await client.models.list()
+        except openai.APIConnectionError:
+            raise RuntimeError("vllm 서버가 실행 중인지 확인해주세요.")
 
-    # CSV 파일에 OCR 결과를 저장하면 진행
-    with open(csv_path, 'a', newline='', encoding='utf-8') as csvfile:
-        fieldnames = ['frame_number', 'time', 'text']
-        writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
+        # CSV 파일에 OCR 결과를 저장하면 진행
+        with open(csv_path, 'a', newline='', encoding='utf-8') as csvfile:
+            fieldnames = ['frame_number', 'time', 'text']
+            writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
 
-        #  결과를 순서대로 내보내기 위한 우선순위 큐
-        heap: list[tuple[int, str]] = []
-        next_frame_to_write = start_ocr_frame + 1
+            #  결과를 순서대로 내보내기 위한 우선순위 큐
+            heap: list[tuple[int, str]] = []
+            next_frame_to_write = start_ocr_frame + 1
 
-        #  실행 중·대기 중인 태스크 집합
-        running: set[asyncio.Task] = set()
+            ocr_error: OcrProcessingError | None = None
 
-        for frame_number, img_b64 in frame_batch_generator(cap, x, y, width, height, end_frame):
+            for frame_number, img_b64 in frame_batch_generator(cap, x, y, width, height, end_frame):
 
-            # 새 태스크 추가
-            task = asyncio.create_task(ocr_one_frame(client, frame_number, img_b64, settings.llm_model))
-            running.add(task)
+                # 새 태스크 추가
+                task = asyncio.create_task(ocr_one_frame(client, frame_number, img_b64, settings.llm_model))
+                running.add(task)
 
-            #  태스크 수가 N를 초과하지 않도록 완료될 때까지 대기
-            if len(running) >= 3:
-                done, running = await asyncio.wait(running, return_when=asyncio.FIRST_COMPLETED)
+                #  태스크 수가 N를 초과하지 않도록 완료될 때까지 대기
+                if len(running) >= 3:
+                    done, pending = await asyncio.wait(running, return_when=asyncio.FIRST_COMPLETED)
+                    running = pending
 
-                for t in done:
-                    fn, txt = t.result()
-                    heappush(heap, (fn, txt))
+                    for t in done:
+                        try:
+                            fn, txt = t.result()
+                            heappush(heap, (fn, txt))
+                        except OcrProcessingError as exc:
+                            ocr_error = ocr_error or exc
+                    
+                    if ocr_error:
+                        await cancel_running_tasks()
+                        raise ocr_error
                 
-            #  heap 안에 다음 프레임이 있으면 순서대로 기록
-            while heap and heap[0][0] == next_frame_to_write:
+                #  heap 안에 다음 프레임이 있으면 순서대로 기록
+                while heap and heap[0][0] == next_frame_to_write:
+                    fn, ocr_text = heappop(heap)
+                    ocr_text = clean_ocr_text(ocr_text)  # 불필요한 대괄호 제거
+                    if ocr_text:
+                        print(ocr_text)
+                    writer.writerow({
+                        "frame_number": fn,
+                        "time": round(fn / frame_rate, 3),
+                        "text": ocr_text,
+                    })
+                    next_frame_to_write += 1
+                    percentage = round((fn - start_frame) / total_frames * 100, 2)
+                    yield percentage
+                csvfile.flush()
+            
+            # 남아 있는 태스크 모두 완료
+            if running:
+                results = await asyncio.gather(*running, return_exceptions=True)
+                running.clear()
+                for result in results:
+                    if isinstance(result, Exception):
+                        if isinstance(result, OcrProcessingError):
+                            ocr_error = ocr_error or result
+                        else:
+                            raise result
+                    else:
+                        fn, txt = result
+                        heappush(heap, (fn, txt))
+
+            if ocr_error:
+                raise ocr_error
+
+            # heap 잔여 결과 정리
+            while heap:
                 fn, ocr_text = heappop(heap)
-                ocr_text = clean_ocr_text(ocr_text)  # 불필요한 대괄호 제거
-                if ocr_text:
-                    print(ocr_text)
+                ocr_text = clean_ocr_text(ocr_text)
                 writer.writerow({
                     "frame_number": fn,
                     "time": round(fn / frame_rate, 3),
                     "text": ocr_text,
                 })
-                next_frame_to_write += 1
-                percentage = round((fn - start_frame) / total_frames * 100, 2)
-                yield percentage
             csvfile.flush()
-        
-        # 남아 있는 태스크 모두 완료
-        for t in asyncio.as_completed(running):
-            fn, txt = await t
-            heappush(heap, (fn, txt))
-
-        # heap 잔여 결과 정리
-        while heap:
-            fn, ocr_text = heappop(heap)
-            ocr_text = clean_ocr_text(ocr_text)
-            writer.writerow({
-                "frame_number": fn,
-                "time": round(fn / frame_rate, 3),
-                "text": ocr_text,
-            })
-        csvfile.flush()
-        
-        # 진행 상황 업데이트
-        yield 100
+            
+            # 진행 상황 업데이트
+            yield 100
+    finally:
+        await cancel_running_tasks()
+        if cap.isOpened():
+            cap.release()
 
     # OCR 완료 후 CSV 파일 읽기
     non_empty_texts: List[str] = []
