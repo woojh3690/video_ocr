@@ -170,7 +170,7 @@ function setActionButtons(row, status, taskId) {
             cancelTask(taskId);
         };
         cell.appendChild(cancelBtn);
-    } else if (status === 'cancelled' || status === 'cancelling') {
+    } else if (status === 'cancelled' || status === 'cancelling' || status === 'error') {
         const resumeBtn = document.createElement('button');
         resumeBtn.className = 'btn btn-primary btn-sm resume-btn mr-1';
         resumeBtn.innerText = '재개';

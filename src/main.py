@@ -520,10 +520,11 @@ async def resume_ocr(task_id: str = Form(...)):
         raise HTTPException(status_code=404, detail="Task not found")
 
     task = tasks[task_id]
-    if task.status != Status.cancelled:
-        raise HTTPException(status_code=400, detail="Task is not cancelled")
+    if task.status not in (Status.cancelled, Status.error):
+        raise HTTPException(status_code=400, detail="Task is not resumable")
     task.status = Status.waiting
     task.task_start_time = None
+    task.error = None
     await broadcast_update(task)
     await start_next_task()
     return {"detail": f"Task {task_id} resumed"}
