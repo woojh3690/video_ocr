@@ -11,6 +11,7 @@ from collections import Counter
 
 import cv2
 import openai
+from openai import LengthFinishReasonError
 from pydantic import BaseModel, ValidationError
 from langdetect import detect
 from langdetect.lang_detect_exception import LangDetectException
@@ -135,7 +136,7 @@ async def ocr_one_frame(
         ocr_text = completion.choices[0].message.parsed.texts
         if len(ocr_text) == 1 or ocr_text == "example":
             ocr_text = ""
-    except (ValidationError, json.JSONDecodeError) as e:
+    except (ValidationError, json.JSONDecodeError, LengthFinishReasonError) as e:
         # 예외가 발생해도 그냥 빈 문자열로 치환하고 로그만 남긴다
         print(f"[Warn] 프레임 {frame_number} OCR 중 예외 발생: {e!r}")
         ocr_text = ""
