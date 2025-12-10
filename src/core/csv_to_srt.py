@@ -19,6 +19,7 @@ class Row:
     frame_number: int
     time: float
     text: str
+    region: int = 0
 
 
 @dataclass
@@ -27,6 +28,7 @@ class Segment:
     start: float
     end: float
     text: str
+    region: int = 0
 
 
 def normalize_text(text: str) -> str:
@@ -188,7 +190,11 @@ def parse_csv(path: Path) -> List[Row]:
             except Exception:
                 continue
             text = record.get("text") or ""
-            rows.append(Row(frame_number=frame, time=timestamp, text=text))
+            try:
+                region = int(record.get("region", 0))
+            except Exception:
+                region = 0
+            rows.append(Row(frame_number=frame, time=timestamp, text=text, region=region))
     rows.sort(key=lambda r: r.time)
     return rows
 
@@ -364,6 +370,7 @@ def build_segments(
                     start=current_start,
                     end=end_time,
                     text=rep,
+                    region=rows[0].region if rows else 0,
                 )
             )
         current_text = None
@@ -441,6 +448,49 @@ def write_srt(segments: Iterable[Segment], out_path: Path) -> None:
             handle.write(f"{seg.text}\n")
 
 
+def merge_segments_by_region(segments_by_region: dict[int, List[Segment]]) -> List[Segment]:
+    """여러 지역별 세그먼트를 하나의 타임라인으로 병합합니다."""
+    if not segments_by_region:
+        return []
+
+    # 구간 경계 수집
+    boundaries: set[float] = set()
+    for segs in segments_by_region.values():
+        for seg in segs:
+            boundaries.add(seg.start)
+            boundaries.add(seg.end)
+    points = sorted(boundaries)
+    if len(points) < 2:
+        return []
+
+    merged: List[Segment] = []
+
+    def append_or_extend(start: float, end: float, text: str) -> None:
+        if not text or end <= start:
+            return
+        if merged and math.isclose(merged[-1].end, start) and merged[-1].text == text:
+            merged[-1].end = end
+            return
+        merged.append(Segment(index=len(merged) + 1, start=start, end=end, text=text, region=-1))
+
+    for t0, t1 in zip(points, points[1:]):
+        active: List[Segment] = []
+        for region, segs in segments_by_region.items():
+            for seg in segs:
+                if seg.start < t1 and seg.end > t0:
+                    active.append(seg)
+        if not active:
+            continue
+        # region 순서대로 정렬하여 좌/우 등 일관된 라인 순서를 유지
+        active.sort(key=lambda s: s.region)
+        text_lines = [seg.text for seg in active if seg.text]
+        append_or_extend(t0, t1, "\n".join(text_lines))
+
+    for idx, seg in enumerate(merged, start=1):
+        seg.index = idx
+    return merged
+
+
 def convert_csv_to_srt(
     in_csv: Path,
     out_srt: Optional[Path] = None,
@@ -456,18 +506,26 @@ def convert_csv_to_srt(
     same_text_token_thresh: float = 0.75,
 ) -> Path:
     rows = parse_csv(in_csv)
-    segments = build_segments(
-        rows,
-        max_gap=max_gap,
-        min_duration=min_duration,
-        overlap_guard=overlap_guard,
-        char_thresh=char_thresh,
-        token_thresh=token_thresh,
-        similar_gap=similar_gap,
-        same_text_gap=same_text_gap,
-        same_text_char_thresh=same_text_char_thresh,
-        same_text_token_thresh=same_text_token_thresh,
-    )
+    rows_by_region: dict[int, List[Row]] = {}
+    for row in rows:
+        rows_by_region.setdefault(row.region, []).append(row)
+
+    segments_by_region: dict[int, List[Segment]] = {}
+    for region, region_rows in rows_by_region.items():
+        segments_by_region[region] = build_segments(
+            region_rows,
+            max_gap=max_gap,
+            min_duration=min_duration,
+            overlap_guard=overlap_guard,
+            char_thresh=char_thresh,
+            token_thresh=token_thresh,
+            similar_gap=similar_gap,
+            same_text_gap=same_text_gap,
+            same_text_char_thresh=same_text_char_thresh,
+            same_text_token_thresh=same_text_token_thresh,
+        )
+
+    segments = merge_segments_by_region(segments_by_region)
     if out_srt is None:
         out_srt = in_csv.with_suffix(".srt")
     write_srt(segments, out_srt)

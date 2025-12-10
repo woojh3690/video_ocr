@@ -28,55 +28,81 @@
 }
 
 /* 바운딩 박스 스타일 */
-#bounding-box {
+.bounding-box {
     position: absolute;
-    border: 2px dashed red;
+    border: 2px dashed #e03131;
     top: 0;
     left: 0;
     width: 100%;
     height: 100%;
     box-sizing: border-box;
     pointer-events: none;
+    color: #e03131;
+}
+
+.bounding-box.secondary {
+    border-color: #2b6cb0;
+    color: #2b6cb0;
+}
+
+.bounding-box.hidden {
+    display: none;
+}
+
+.box-label {
+    position: absolute;
+    top: -22px;
+    left: 0;
+    background: rgba(0, 0, 0, 0.65);
+    color: #fff;
+    font-size: 12px;
+    padding: 2px 8px;
+    border-radius: 4px;
+    pointer-events: none;
+}
+
+.bounding-box.secondary .box-label {
+    background: rgba(43, 108, 176, 0.85);
 }
 
 /* 드래그 핸들 스타일 */
-.handle {
+.bounding-box .handle {
     position: absolute;
-    background-color: blue;
+    background-color: currentColor;
     opacity: 0.5;
     z-index: 10;
     pointer-events: auto;
 }
 
-.handle.top,
-.handle.bottom {
+.bounding-box .handle.top,
+.bounding-box .handle.bottom {
     left: 0;
     width: 100%;
     height: 10px;
     cursor: ns-resize;
 }
 
-.handle.top {
+.bounding-box .handle.top {
     top: -5px;
 }
 
-.handle.bottom {
+.bounding-box .handle.bottom {
     bottom: -5px;
 }
 
-.handle.left,
-.handle.right {
+.bounding-box .handle.left,
+.bounding-box .handle.right {
     top: 0;
     width: 10px;
     height: 100%;
     cursor: ew-resize;
 }
 
-.handle.left {
+.bounding-box .handle.left {
     left: -5px;
 }
 
-.handle.right {
+.bounding-box .handle.right {
     right: -5px;
 }
 

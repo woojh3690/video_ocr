@@ -5,8 +5,7 @@ import base64
 import asyncio
 import unicodedata
 from pathlib import Path
-from heapq import heappush, heappop
-from typing import List, Generator
+from typing import Dict, Generator, List, Optional, Tuple
 from collections import Counter
 
 import cv2
@@ -88,9 +87,9 @@ def get_last_processed_frame_number(csv_path, fieldnames) -> int:
 # 동영상 파일에서 프레임을 배치 단위로 생성하는 제너레이터.
 def frame_batch_generator(
     cap: cv2.VideoCapture,
-    x, y, width, height,
+    regions: List[Dict[str, int]],
     end_frame: int = None
-) -> Generator[List, None, None]:
+) -> Generator[Tuple[int, List[Tuple[int, str]]], None, None]:
     while True:
         # 프레임 읽기
         ret, frame = cap.read()
@@ -101,23 +100,32 @@ def frame_batch_generator(
             cap.release()
             break
         
-        # 이미지 크롭
-        cropped_frame = frame[y:y+height, x:x+width]
+        region_payloads: List[Tuple[int, str]] = []
+        for idx, reg in enumerate(regions):
+            x = reg["x"]
+            y = reg["y"]
+            width = reg["width"]
+            height = reg["height"]
+            cropped_frame = frame[y:y+height, x:x+width]
 
-        # 이미지를 base64로 인코딩
-        rgb_frame = cv2.cvtColor(cropped_frame, cv2.COLOR_BGR2RGB)
-        success, buffer = cv2.imencode('.jpg', rgb_frame)
-        img_base64 = base64.b64encode(buffer).decode("utf-8")
+            # 이미지를 base64로 인코딩
+            rgb_frame = cv2.cvtColor(cropped_frame, cv2.COLOR_BGR2RGB)
+            success, buffer = cv2.imencode('.jpg', rgb_frame)
+            if not success:
+                continue
+            img_base64 = base64.b64encode(buffer).decode("utf-8")
+            region_payloads.append((idx, img_base64))
 
-        yield [frame_number, img_base64]
+        yield frame_number, region_payloads
 
 # OCR 1회 호출을 비동기 태스크로 분리
 async def ocr_one_frame(
     client: openai.AsyncOpenAI,
     frame_number: int,
+    region_index: int,
     img_base64: str,
     llm_model: str,
-) -> tuple[int, str]:            # (frame_number, ocr_text) 반환
+) -> tuple[int, int, str]:            # (frame_number, region_index, ocr_text) 반환
     messages = [
         {"role": "system", "content": system_prompt},
         {"role": "user", "content": [
@@ -144,13 +152,14 @@ async def ocr_one_frame(
         error = OcrProcessingError(frame_number, e)
         print(f"[Error] {error}")
         raise error
-    return frame_number, ocr_text
+    return frame_number, region_index, ocr_text
     
 async def process_ocr(
     video_filename,
     x, y, width, height,
     start_time=0,
-    end_time=None
+    end_time=None,
+    regions: Optional[List[Dict[str, int]]] = None,
 ):
     # 파일 경로 정보 초기화
     UPLOAD_DIR = "uploads"
@@ -158,8 +167,13 @@ async def process_ocr(
     video_path_obj = Path(video_path)
     csv_path = str(video_path_obj.with_suffix(".csv"))
 
+    region_list: List[Dict[str, int]] = regions if regions else [{"x": x, "y": y, "width": width, "height": height}]
+    if not region_list:
+        raise ValueError("OCR 영역이 지정되지 않았습니다.")
+    region_count = len(region_list)
+
     # 마지막으로 OCR 처리된 프레임 번호 확인
-    fieldnames = ['frame_number', 'time', 'text']
+    fieldnames = ['frame_number', 'time', 'region', 'text']
     last_frame_number = get_last_processed_frame_number(csv_path, fieldnames)
 
     # 영상 정보 추출
@@ -178,6 +192,8 @@ async def process_ocr(
     cap.set(cv2.CAP_PROP_POS_FRAMES, start_ocr_frame)
 
     running: set[asyncio.Task] = set()
+    pending_results: Dict[int, Dict[int, str]] = {}
+    max_running_tasks = max(3, region_count * 2)
 
     async def cancel_running_tasks():
         if not running:
@@ -200,30 +216,67 @@ async def process_ocr(
 
         # CSV 파일에 OCR 결과를 저장하면 진행
         with open(csv_path, 'a', newline='', encoding='utf-8') as csvfile:
-            fieldnames = ['frame_number', 'time', 'text']
+            fieldnames = ['frame_number', 'time', 'region', 'text']
             writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
 
-            #  결과를 순서대로 내보내기 위한 우선순위 큐
-            heap: list[tuple[int, str]] = []
             next_frame_to_write = start_ocr_frame + 1
 
             ocr_error: OcrProcessingError | None = None
 
-            for frame_number, img_b64 in frame_batch_generator(cap, x, y, width, height, end_frame):
+            def record_result(fn: int, region_idx: int, ocr_text: str) -> None:
+                if fn not in pending_results:
+                    pending_results[fn] = {}
+                pending_results[fn][region_idx] = ocr_text
+
+            def flush_ready_frames() -> List[float]:
+                nonlocal next_frame_to_write
+                progresses: List[float] = []
+                while True:
+                    region_map = pending_results.get(next_frame_to_write)
+                    if region_map is None or len(region_map) < region_count:
+                        break
+
+                    merged_texts: List[str] = []
+                    for ridx in range(region_count):
+                        cleaned = clean_ocr_text(region_map.get(ridx, ""))
+                        if cleaned:
+                            merged_texts.append((ridx, cleaned))
+                    for ridx, text_val in merged_texts:
+                        writer.writerow({
+                            "frame_number": next_frame_to_write,
+                            "time": round(next_frame_to_write / frame_rate, 3),
+                            "region": ridx,
+                            "text": text_val,
+                        })
+                        print(text_val)
+                    pending_results.pop(next_frame_to_write, None)
+                    next_frame_to_write += 1
+                    percentage = round((next_frame_to_write - 1 - start_frame) / total_frames * 100, 2)
+                    progresses.append(percentage)
+                csvfile.flush()
+                return progresses
+
+            for frame_number, region_payloads in frame_batch_generator(cap, region_list, end_frame):
 
                 # 새 태스크 추가
-                task = asyncio.create_task(ocr_one_frame(client, frame_number, img_b64, settings.llm_model))
-                running.add(task)
+                for region_idx, img_b64 in region_payloads:
+                    task = asyncio.create_task(ocr_one_frame(client, frame_number, region_idx, img_b64, settings.llm_model))
+                    running.add(task)
+                if len(region_payloads) < region_count:
+                    existing = {idx for idx, _ in region_payloads}
+                    for ridx in range(region_count):
+                        if ridx not in existing:
+                            record_result(frame_number, ridx, "")
 
                 #  태스크 수가 N를 초과하지 않도록 완료될 때까지 대기
-                if len(running) >= 3:
+                if len(running) >= max_running_tasks:
                     done, pending = await asyncio.wait(running, return_when=asyncio.FIRST_COMPLETED)
                     running = pending
 
                     for t in done:
                         try:
-                            fn, txt = t.result()
-                            heappush(heap, (fn, txt))
+                            fn, ridx, txt = t.result()
+                            record_result(fn, ridx, txt)
                         except OcrProcessingError as exc:
                             ocr_error = ocr_error or exc
                     
@@ -231,21 +284,8 @@ async def process_ocr(
                         await cancel_running_tasks()
                         raise ocr_error
                 
-                #  heap 안에 다음 프레임이 있으면 순서대로 기록
-                while heap and heap[0][0] == next_frame_to_write:
-                    fn, ocr_text = heappop(heap)
-                    ocr_text = clean_ocr_text(ocr_text)  # 불필요한 대괄호 제거
-                    if ocr_text:
-                        print(ocr_text)
-                    writer.writerow({
-                        "frame_number": fn,
-                        "time": round(fn / frame_rate, 3),
-                        "text": ocr_text,
-                    })
-                    next_frame_to_write += 1
-                    percentage = round((fn - start_frame) / total_frames * 100, 2)
-                    yield percentage
-                csvfile.flush()
+                    for progress in flush_ready_frames():
+                        yield progress
             
             # 남아 있는 태스크 모두 완료
             if running:
@@ -258,22 +298,14 @@ async def process_ocr(
                         else:
                             raise result
                     else:
-                        fn, txt = result
-                        heappush(heap, (fn, txt))
+                        fn, ridx, txt = result
+                        record_result(fn, ridx, txt)
 
             if ocr_error:
                 raise ocr_error
 
-            # heap 잔여 결과 정리
-            while heap:
-                fn, ocr_text = heappop(heap)
-                ocr_text = clean_ocr_text(ocr_text)
-                writer.writerow({
-                    "frame_number": fn,
-                    "time": round(fn / frame_rate, 3),
-                    "text": ocr_text,
-                })
-            csvfile.flush()
+            for progress in flush_ready_frames():
+                yield progress
             
             # 진행 상황 업데이트
             yield 100

@@ -1,6 +1,7 @@
 import os
 import sys
 import re
+import json
 import uuid
 import asyncio
 import time
@@ -51,6 +52,7 @@ class Task:
     ocr_y: int = 0
     ocr_width: int = 0
     ocr_height: int = 0
+    regions: List[Dict[str, int]] = field(default_factory=list)
     ocr_start_time: Optional[int] = 0
     ocr_end_time: Optional[int] = None
     result: Optional[str] = None
@@ -324,16 +326,50 @@ async def browse(path: str = ""):
         rel_path = ""
     return {"path": rel_path, "entries": entries}
 
+
+def parse_regions_payload(
+    regions_payload: Optional[str],
+    fallback: Optional[Dict[str, int]],
+) -> List[Dict[str, int]]:
+    """Parse OCR 영역 정보를 리스트 형태로 반환합니다."""
+    if regions_payload:
+        try:
+            parsed = json.loads(regions_payload)
+        except json.JSONDecodeError as exc:
+            raise HTTPException(status_code=400, detail="OCR 영역 정보가 올바르지 않습니다.") from exc
+        if not isinstance(parsed, list) or not parsed:
+            raise HTTPException(status_code=400, detail="OCR 영역을 최소 1개 이상 지정해주세요.")
+        regions: List[Dict[str, int]] = []
+        for idx, item in enumerate(parsed):
+            if not isinstance(item, dict):
+                raise HTTPException(status_code=400, detail=f"{idx + 1}번째 영역 정보가 잘못되었습니다.")
+            try:
+                rx = int(item.get("x"))
+                ry = int(item.get("y"))
+                rw = int(item.get("width"))
+                rh = int(item.get("height"))
+            except (TypeError, ValueError) as exc:
+                raise HTTPException(status_code=400, detail=f"{idx + 1}번째 영역 좌표가 잘못되었습니다.") from exc
+            if rw <= 0 or rh <= 0:
+                raise HTTPException(status_code=400, detail=f"{idx + 1}번째 영역의 너비/높이가 0보다 커야 합니다.")
+            regions.append({"x": rx, "y": ry, "width": rw, "height": rh})
+        return regions[:2]
+
+    if fallback:
+        return [fallback]
+    raise HTTPException(status_code=400, detail="OCR 영역을 지정해주세요.")
+
 # ---------------------------
 # 백그라운드 OCR 작업 관련 함수 및 엔드포인트
 # ---------------------------
 @app.post("/start_ocr/")
 async def start_ocr_endpoint(
-    video_filename: str = Form(...), 
-    x: int = Form(...), 
-    y: int = Form(...), 
-    width: int = Form(...),
-    height: int = Form(...),
+    video_filename: str = Form(...),
+    x: Optional[int] = Form(None),
+    y: Optional[int] = Form(None),
+    width: Optional[int] = Form(None),
+    height: Optional[int] = Form(None),
+    regions: Optional[str] = Form(None),
     start_time: Optional[int] = Form(0),
     end_time: Optional[int] = Form(None)
 ):
@@ -370,6 +406,14 @@ async def start_ocr_endpoint(
             )
         if end_time <= start_time:
             raise HTTPException(status_code=400, detail="종료 시간은 시작 시간보다 커야 합니다.")
+
+    fallback_region: Optional[Dict[str, int]] = None
+    if None not in (x, y, width, height):
+        if width <= 0 or height <= 0:
+            raise HTTPException(status_code=400, detail="OCR 영역의 너비/높이는 0보다 커야 합니다.")
+        fallback_region = {"x": x, "y": y, "width": width, "height": height}
+
+    region_list = parse_regions_payload(regions, fallback_region)
     
     # 작업(task) 생성
     task_id = str(uuid.uuid4())
@@ -381,10 +425,11 @@ async def start_ocr_endpoint(
         estimated_completion="TBD",
         messages=[],
         task_start_time=None,
-        ocr_x=x,
-        ocr_y=y,
-        ocr_width=width,
-        ocr_height=height,
+        ocr_x=region_list[0]["x"],
+        ocr_y=region_list[0]["y"],
+        ocr_width=region_list[0]["width"],
+        ocr_height=region_list[0]["height"],
+        regions=region_list,
         ocr_start_time=start_time,
         ocr_end_time=end_time,
     )
@@ -397,7 +442,13 @@ async def start_ocr_endpoint(
     
     return {"task_id": task_id}
 
-async def run_ocr_task(task_id, video_filename, x, y, width, height, start_time, end_time):
+async def run_ocr_task(
+    task_id: str,
+    video_filename: str,
+    regions: List[Dict[str, int]],
+    start_time: Optional[int],
+    end_time: Optional[int],
+):
     print(f"[시작] {task_id} - {video_filename}")
 
     task = tasks[task_id]
@@ -430,7 +481,17 @@ async def run_ocr_task(task_id, video_filename, x, y, width, height, start_time,
         task.status = Status.running
         task.task_start_time = None
         await broadcast_update(task)
-        async for progress in process_ocr(video_filename, x, y, width, height, start_time, end_time):
+        primary_region = regions[0] if regions else {"x": 0, "y": 0, "width": 0, "height": 0}
+        async for progress in process_ocr(
+            video_filename,
+            primary_region["x"],
+            primary_region["y"],
+            primary_region["width"],
+            primary_region["height"],
+            start_time,
+            end_time,
+            regions=regions,
+        ):
             # Check if cancellation was requested.
             if task.status == Status.cancelling:
                 task.status = Status.cancelled
@@ -488,10 +549,16 @@ async def start_next_task():
         run_ocr_task(
             next_id,
             next_task.video_filename,
-            next_task.ocr_x,
-            next_task.ocr_y,
-            next_task.ocr_width,
-            next_task.ocr_height,
+            next_task.regions
+            if next_task.regions
+            else [
+                {
+                    "x": next_task.ocr_x,
+                    "y": next_task.ocr_y,
+                    "width": next_task.ocr_width,
+                    "height": next_task.ocr_height,
+                }
+            ],
             next_task.ocr_start_time,
             next_task.ocr_end_time,
         )

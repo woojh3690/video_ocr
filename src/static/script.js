@@ -7,19 +7,28 @@ let isTaskRunning = false;
 // 각 작업의 상태 기록
 const taskStatusMap = {};
 
-let boundingBox = document.getElementById('bounding-box');
-let handles = document.querySelectorAll('.handle');
+const boundingBoxes = [
+    { element: document.getElementById('bounding-box-1'), enabled: true },
+    { element: document.getElementById('bounding-box-2'), enabled: false },
+];
+boundingBoxes.forEach((box) => {
+    box.handles = box.element.querySelectorAll('.handle');
+});
+const secondRegionToggle = document.getElementById('toggle-second-region');
 
-let dragging = false;
-let dragDirection = '';
-let startY = 0;
-let startX = 0;
-let startHeight = 0;
-let startWidth = 0;
+const dragState = {
+    active: false,
+    direction: '',
+    startY: 0,
+    startX: 0,
+    startHeight: 0,
+    startWidth: 0,
+    startTop: 0,
+    startLeft: 0,
+    targetBox: null,
+};
 let videoWidth = 0;
 let videoHeight = 0;
-let startTop = 0;
-let startLeft = 0;
 
 let vfilename = null;
 let fileBrowser = document.getElementById('file-browser');
@@ -121,6 +130,97 @@ function loadDirectory(path = '') {
         });
 }
 
+function setBoundingBoxEnabled(box, enabled) {
+    box.enabled = enabled;
+    if (enabled) {
+        box.element.classList.remove('hidden');
+    } else {
+        box.element.classList.add('hidden');
+    }
+    box.element.dataset.enabled = enabled ? 'true' : 'false';
+}
+
+function layoutDefaultRegions() {
+    if (!video.videoWidth || !video.videoHeight) {
+        return;
+    }
+    const videoContainer = document.getElementById('video-container');
+    videoContainer.style.width = video.clientWidth + 'px';
+    videoContainer.style.height = video.clientHeight + 'px';
+    const usableHeight = Math.max(20, video.clientHeight);
+    const halfWidth = Math.max(40, Math.floor(video.clientWidth / 2));
+
+    const primaryWidth = secondRegionToggle.checked ? halfWidth - 4 : video.clientWidth;
+    const primaryBox = boundingBoxes[0].element;
+    primaryBox.style.top = '0px';
+    primaryBox.style.left = '0px';
+    primaryBox.style.width = `${primaryWidth}px`;
+    primaryBox.style.height = `${usableHeight}px`;
+
+    const secondaryBox = boundingBoxes[1].element;
+    if (secondRegionToggle.checked) {
+        const secondaryWidth = halfWidth - 4;
+        secondaryBox.style.top = '0px';
+        secondaryBox.style.height = `${usableHeight}px`;
+        secondaryBox.style.width = `${secondaryWidth}px`;
+        secondaryBox.style.left = `${Math.max(0, video.clientWidth - secondaryWidth)}px`;
+    }
+}
+
+function attachHandleListeners() {
+    boundingBoxes.forEach((box) => {
+        box.handles.forEach((handle) => {
+            handle.addEventListener('mousedown', function(e) {
+                dragState.active = true;
+                dragState.targetBox = box.element;
+                dragState.direction = e.target.classList.contains('top') ? 'top' :
+                    e.target.classList.contains('bottom') ? 'bottom' :
+                    e.target.classList.contains('left') ? 'left' :
+                    e.target.classList.contains('right') ? 'right' : '';
+                dragState.startY = e.clientY;
+                dragState.startX = e.clientX;
+                dragState.startHeight = box.element.offsetHeight;
+                dragState.startWidth = box.element.offsetWidth;
+                dragState.startTop = box.element.offsetTop;
+                dragState.startLeft = box.element.offsetLeft;
+                e.preventDefault();
+            });
+        });
+    });
+}
+
+function getEnabledRegions() {
+    const regions = [];
+    const videoRect = video.getBoundingClientRect();
+    const scaleX = video.videoWidth / video.clientWidth;
+    const scaleY = video.videoHeight / video.clientHeight;
+
+    boundingBoxes.forEach((box, idx) => {
+        if (!box.enabled || box.element.classList.contains('hidden')) {
+            return;
+        }
+        const boxRect = box.element.getBoundingClientRect();
+        let x = boxRect.left - videoRect.left;
+        let y = boxRect.top - videoRect.top;
+        let width = boxRect.width;
+        let height = boxRect.height;
+        x = Math.round(x * scaleX);
+        y = Math.round(y * scaleY);
+        width = Math.round(width * scaleX);
+        height = Math.round(height * scaleY);
+        regions.push({
+            x,
+            y,
+            width,
+            height,
+            label: idx === 0 ? "region_1" : "region_2"
+        });
+    });
+    return regions;
+}
+
+setBoundingBoxEnabled(boundingBoxes[0], true);
+setBoundingBoxEnabled(boundingBoxes[1], false);
 function selectVideo(path) {
     const videoExtensions = ['.mp4', '.avi', '.mov', '.mkv', '.webm', '.mpg', '.mpeg', '.wmv'];
     const lower = path.toLowerCase();
@@ -132,19 +232,15 @@ function selectVideo(path) {
     vfilename = path;
     const targetDiv = document.querySelector('#video-container');
     targetDiv.style.display = 'block';
+    setBoundingBoxEnabled(boundingBoxes[0], true);
+    setBoundingBoxEnabled(boundingBoxes[1], secondRegionToggle.checked);
     let url = `/videos/${encodePath(path)}`;
     video.src = url;
     video.load();
     video.onloadedmetadata = function() {
         videoWidth = video.videoWidth;
         videoHeight = video.videoHeight;
-        let videoContainer = document.getElementById('video-container');
-        videoContainer.style.width = video.clientWidth + 'px';
-        videoContainer.style.height = video.clientHeight + 'px';
-        boundingBox.style.top = '0px';
-        boundingBox.style.left = '0px';
-        boundingBox.style.width = video.clientWidth + 'px';
-        boundingBox.style.height = (video.clientHeight - video.controls.offsetHeight) + 'px';
+        layoutDefaultRegions();
     };
 }
 
@@ -331,75 +427,70 @@ backToListBtn.addEventListener('click', function() {
     switchToTaskListView();
 });
 
-
-
-
-// 드래그 핸들 이벤트 처리
-handles.forEach(function(handle) {
-    handle.addEventListener('mousedown', function(e) {
-        dragging = true;
-        dragDirection = e.target.classList.contains('top') ? 'top' :
-                        e.target.classList.contains('bottom') ? 'bottom' :
-                        e.target.classList.contains('left') ? 'left' :
-                        e.target.classList.contains('right') ? 'right' : '';
-        startY = e.clientY;
-        startX = e.clientX;
-        startHeight = boundingBox.offsetHeight;
-        startWidth = boundingBox.offsetWidth;
-        startTop = boundingBox.offsetTop;
-        startLeft = boundingBox.offsetLeft;
-        e.preventDefault();
-    });
+secondRegionToggle.addEventListener('change', function() {
+    const enabled = secondRegionToggle.checked;
+    setBoundingBoxEnabled(boundingBoxes[1], enabled);
+    layoutDefaultRegions();
 });
+
+attachHandleListeners();
 
 document.addEventListener('mousemove', function(e) {
-    if (dragging) {
-        let dy = e.clientY - startY;
-        let dx = e.clientX - startX;
-        if (dragDirection === 'top') {
-            let newHeight = startHeight - dy;
-            let newTop = startTop + dy;
-            if (newHeight > 20 && newTop >= 0) {
-                boundingBox.style.height = newHeight + 'px';
-                boundingBox.style.top = newTop + 'px';
-            } else if (newTop < 0) {
-                boundingBox.style.height = startHeight + startTop + 'px';
-                boundingBox.style.top = '0px';
-            }
-        } else if (dragDirection === 'bottom') {
-            let newHeight = startHeight + dy;
-            let maxHeight = video.clientHeight - startTop;
-            if (newHeight > 20 && newHeight <= maxHeight) {
-                boundingBox.style.height = newHeight + 'px';
-            } else if (newHeight > maxHeight) {
-                boundingBox.style.height = maxHeight + 'px';
-            }
-        } else if (dragDirection === 'left') {
-            let newWidth = startWidth - dx;
-            let newLeft = startLeft + dx;
-            if (newWidth > 20 && newLeft >= 0) {
-                boundingBox.style.width = newWidth + 'px';
-                boundingBox.style.left = newLeft + 'px';
-            } else if (newLeft < 0) {
-                boundingBox.style.width = startWidth + startLeft + 'px';
-                boundingBox.style.left = '0px';
-            }
-        } else if (dragDirection === 'right') {
-            let newWidth = startWidth + dx;
-            let maxWidth = video.clientWidth - startLeft;
-            if (newWidth > 20 && newWidth <= maxWidth) {
-                boundingBox.style.width = newWidth + 'px';
-            } else if (newWidth > maxWidth) {
-                boundingBox.style.width = maxWidth + 'px';
-            }
-        }
-        e.preventDefault();
+    if (!dragState.active || !dragState.targetBox) {
+        return;
     }
+    const targetBox = dragState.targetBox;
+    if (targetBox.classList.contains('hidden')) {
+        return;
+    }
+
+    const dy = e.clientY - dragState.startY;
+    const dx = e.clientX - dragState.startX;
+
+    if (dragState.direction === 'top') {
+        let newHeight = dragState.startHeight - dy;
+        let newTop = dragState.startTop + dy;
+        if (newHeight > 20 && newTop >= 0) {
+            targetBox.style.height = newHeight + 'px';
+            targetBox.style.top = newTop + 'px';
+        } else if (newTop < 0) {
+            targetBox.style.height = dragState.startHeight + dragState.startTop + 'px';
+            targetBox.style.top = '0px';
+        }
+    } else if (dragState.direction === 'bottom') {
+        let newHeight = dragState.startHeight + dy;
+        let maxHeight = video.clientHeight - dragState.startTop;
+        if (newHeight > 20 && newHeight <= maxHeight) {
+            targetBox.style.height = newHeight + 'px';
+        } else if (newHeight > maxHeight) {
+            targetBox.style.height = maxHeight + 'px';
+        }
+    } else if (dragState.direction === 'left') {
+        let newWidth = dragState.startWidth - dx;
+        let newLeft = dragState.startLeft + dx;
+        if (newWidth > 20 && newLeft >= 0) {
+            targetBox.style.width = newWidth + 'px';
+            targetBox.style.left = newLeft + 'px';
+        } else if (newLeft < 0) {
+            targetBox.style.width = dragState.startWidth + dragState.startLeft + 'px';
+            targetBox.style.left = '0px';
+        }
+    } else if (dragState.direction === 'right') {
+        let newWidth = dragState.startWidth + dx;
+        let maxWidth = video.clientWidth - dragState.startLeft;
+        if (newWidth > 20 && newWidth <= maxWidth) {
+            targetBox.style.width = newWidth + 'px';
+        } else if (newWidth > maxWidth) {
+            targetBox.style.width = maxWidth + 'px';
+        }
+    }
+    e.preventDefault();
 });
 
-document.addEventListener('mouseup', function(e) {
-    dragging = false;
-    dragDirection = '';
+document.addEventListener('mouseup', function() {
+    dragState.active = false;
+    dragState.direction = '';
+    dragState.targetBox = null;
 });
 
 // mm:ss 형식의 문자열을 초 단위로 변환하는 함수 (예: "02:30" -> 150초)
@@ -419,20 +510,7 @@ function parseTimeString(timeStr) {
 // OCR 시작
 // POST start_ocr를 호출하면 task_id를 받고, WebSocket 업데이트로 진행률이 표시됨.
 startOcrBtn.addEventListener('click', async function() {
-    // 바운딩 박스의 위치와 크기 계산
-    let videoRect = video.getBoundingClientRect();
-    let boxRect = boundingBox.getBoundingClientRect();
-    let x = boxRect.left - videoRect.left;
-    let y = boxRect.top - videoRect.top;
-    let width = boxRect.width;
-    let height = boxRect.height;
-    // 비율 조정
-    let scaleX = video.videoWidth / video.clientWidth;
-    let scaleY = video.videoHeight / video.clientHeight;
-    x = Math.round(x * scaleX);
-    y = Math.round(y * scaleY);
-    width = Math.round(width * scaleX);
-    height = Math.round(height * scaleY);
+    const regionsPayload = getEnabledRegions();
     
     // 새롭게 추가된 시간대 값 읽기 (초 단위)
     const startTimeInput = document.getElementById('startTimeInput');
@@ -444,12 +522,18 @@ startOcrBtn.addEventListener('click', async function() {
         alert('비디오 파일을 선택해주세요.');
         return;
     }
+    if (!regionsPayload.length) {
+        alert('OCR 영역을 최소 1개 이상 지정해주세요.');
+        return;
+    }
     let formData = new FormData();
     formData.append('video_filename', vfilename);
-    formData.append('x', x);
-    formData.append('y', y);
-    formData.append('width', width);
-    formData.append('height', height);
+    formData.append('regions', JSON.stringify(regionsPayload));
+    // 첫 번째 영역은 기존 백엔드와의 호환을 위해 그대로 전달
+    formData.append('x', regionsPayload[0].x);
+    formData.append('y', regionsPayload[0].y);
+    formData.append('width', regionsPayload[0].width);
+    formData.append('height', regionsPayload[0].height);
     if (startTime != 0) {
         formData.append('start_time', startTime);
     }
