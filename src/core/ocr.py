@@ -198,7 +198,7 @@ async def process_ocr(
             )
 
             #  작업 수가 N개를 초과하였을 경우 완료된 작업만 기록
-            if len(running) >= 3:
+            if len(running) >= 32:
                 done, running = await asyncio.wait(running, return_when=asyncio.FIRST_COMPLETED)
                 for t in done:
                     try:
