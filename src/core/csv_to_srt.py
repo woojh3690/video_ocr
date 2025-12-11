@@ -29,6 +29,7 @@ class Segment:
     text: str
 
 
+# 공백·개행·탭 등을 하나의 공백으로 줄여 주는 헬퍼
 def normalize_text(text: str) -> str:
     """Strip and collapse whitespace."""
     if not text:
