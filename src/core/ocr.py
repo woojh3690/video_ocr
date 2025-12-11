@@ -198,7 +198,7 @@ async def process_ocr(
             )
 
             #  작업 수가 N개를 초과하였을 경우 완료된 작업만 기록
-            if len(running) >= 32:
+            if len(running) >= 4:
                 done, running = await asyncio.wait(running, return_when=asyncio.FIRST_COMPLETED)
                 for t in done:
                     try:
@@ -219,7 +219,7 @@ async def process_ocr(
                 next_frame_to_write += 1
                 percentage = round((frame_number - start_frame) / total_frames * 100, 2)
                 if ocr_text:
-                    print(f"[{frame_number}][{percentage}]: {ocr_text}")
+                    print(f"[{frame_number}][{percentage:.2f}]: {ocr_text}")
                 yield percentage
             csvfile.flush()
         
