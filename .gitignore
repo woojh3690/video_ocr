@@ -1,11 +1,17 @@
+# vscode
 .vscode/
+
+# python
 __pycache__/
-test_image/
-few_shot/
-*.srt
-*.mp4
-*.mkv
 *.pkl
 *.csv
 *.gguf
+
+# video
+*.srt
+*.mp4
+*.mkv
+
+# test
+note/
 test.py
