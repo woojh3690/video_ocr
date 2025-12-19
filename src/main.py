@@ -45,7 +45,6 @@ class Task:
     status: Status
     progress: int = 0
     estimated_completion: str = "TBD"
-    messages: List[dict] = field(default_factory=list)
     task_start_time: Optional[float] = None
     ocr_x: int = 0
     ocr_y: int = 0
@@ -170,7 +169,7 @@ def load_tasks():
                         if isinstance(data, Task):
                             tasks[tid] = data
                         elif isinstance(data, dict):
-                            data.pop('interval', None)
+                            data.pop('messages', None)
                             tasks[tid] = Task(**data)
                         else:
                             tasks[tid] = Task(**{})
