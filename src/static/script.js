@@ -281,8 +281,16 @@ function resumeTask(taskId) {
         method: 'POST',
         body: formData
     })
-    .then(response => response.json())
-    .then(data => {
+    .then(async response => {
+        let data = await response.json();
+        if (!response.ok) {
+            if (data.detail === 'RESUME_NOT_READY') {
+                alert('아직 테스트가 준비되지 않았습니다.');
+            } else {
+                alert('OCR 재개 중 오류 발생: ' + data.detail);
+            }
+            return;
+        }
         console.log(data.detail);
     })
     .catch(err => console.error(err));

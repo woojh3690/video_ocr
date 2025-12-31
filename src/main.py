@@ -518,7 +518,9 @@ async def resume_ocr(task_id: str = Form(...)):
         raise HTTPException(status_code=404, detail="Task not found")
 
     task = tasks[task_id]
-    if task.status not in (Status.cancelled, Status.error):
+    if task.status == Status.cancelled:
+        raise HTTPException(status_code=400, detail="RESUME_NOT_READY")
+    if task.status not in (Status.error,):
         raise HTTPException(status_code=400, detail="Task is not resumable")
     task.status = Status.waiting
     task.task_start_time = None
