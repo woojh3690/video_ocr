@@ -378,7 +378,6 @@ async def start_ocr_endpoint(
         status=Status.waiting,
         progress=0,
         estimated_completion="TBD",
-        messages=[],
         task_start_time=None,
         ocr_x=x,
         ocr_y=y,
