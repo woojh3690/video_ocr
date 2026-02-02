@@ -15,7 +15,7 @@
 - Quick health: `curl http://localhost:7340/` (serves index page).
 
 ## Coding Style & Naming Conventions
-- Python 3.11; follow PEP 8 with 4‑space indentation and type hints where practical.
+- Python 3.13; follow PEP 8 with 4‑space indentation and type hints where practical.
 - Names: `snake_case` for functions/variables, `CamelCase` for classes, module filenames in `snake_case`.
 - Keep FastAPI endpoints small; move OCR logic into `src/core/`.
 - Prefer explicit env access (e.g., `DOCKER_URL`, `DOCKER_NAME`, `KAFKA_URL`) with safe defaults.
