@@ -143,6 +143,19 @@ PICKLE_FILENAME = 'tasks.pkl'
 tasks: Dict[str, Task] = {}
 
 
+def get_active_task_id_by_video_filename(video_filename: str) -> Optional[str]:
+    """같은 비디오 경로로 실행/대기 중인 작업 ID를 반환합니다."""
+    target_video_path = os.path.abspath(os.path.join(UPLOAD_DIR, video_filename))
+    active_statuses = {Status.waiting, Status.running, Status.cancelling}
+    for task_id, task in tasks.items():
+        if task.status not in active_statuses:
+            continue
+        task_video_path = os.path.abspath(os.path.join(UPLOAD_DIR, task.video_filename))
+        if task_video_path == target_video_path:
+            return task_id
+    return None
+
+
 def get_running_task_id() -> Optional[str]:
     """현재 실행 중인 작업의 ID를 반환합니다."""
     for tid, t in tasks.items():
@@ -346,6 +359,13 @@ async def start_ocr_endpoint(
     mask_width: Optional[int] = Form(None),
     mask_height: Optional[int] = Form(None),
 ):
+    duplicate_task_id = get_active_task_id_by_video_filename(video_filename)
+    if duplicate_task_id is not None:
+        raise HTTPException(
+            status_code=409,
+            detail=f"동일한 비디오 파일 작업이 이미 진행 중입니다. (task_id: {duplicate_task_id})",
+        )
+
     # 비디오 파일 존재 여부 및 재생 시간(초) 계산
     video_path = os.path.join(UPLOAD_DIR, video_filename)
     if not os.path.exists(video_path):
