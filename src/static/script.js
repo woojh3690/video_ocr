@@ -60,17 +60,21 @@ ws.onerror = (err) => {
 };
 
 // 작업 목록 초기 로드
-fetch('/tasks/')
-    .then((response) => response.json())
-    .then((data) => {
-        // data는 tasks 딕셔너리 형태 { task_id: { ... }, ... }
-        for (const taskId in data) {
-            const task = data[taskId];
-            task.task_id = taskId;
-            updateTaskRow(task);
-        }
-    })
-    .catch((err) => console.error(err));
+function loadTaskList() {
+    return fetch('/tasks/')
+        .then((response) => response.json())
+        .then((data) => {
+            // data는 tasks 딕셔너리 형태 { task_id: { ... }, ... }
+            for (const taskId in data) {
+                const task = data[taskId];
+                task.task_id = taskId;
+                updateTaskRow(task);
+            }
+        })
+        .catch((err) => console.error(err));
+}
+
+loadTaskList();
 
 // --- 함수 정의 ---
 function clamp(value, min, max) {
@@ -721,8 +725,9 @@ startOcrBtn.addEventListener('click', async () => {
         }
 
         // 정상 응답일 경우
-        let data = await response.json();
-        console.log(data.task_id)
+        const data = await response.json();
+        console.log(data.task_id);
+        await loadTaskList();
         switchToTaskListView();
     } catch (err) {
         // 네트워크 오류 등 예외 발생 시
