@@ -52,6 +52,11 @@ class Task:
     ocr_height: int = 0
     ocr_start_time: Optional[int] = 0
     ocr_end_time: Optional[int] = None
+    full_screen_ocr: bool = False
+    mask_x: Optional[int] = None
+    mask_y: Optional[int] = None
+    mask_width: Optional[int] = None
+    mask_height: Optional[int] = None
     result: Optional[str] = None
     error: Optional[str] = None
 
@@ -334,7 +339,12 @@ async def start_ocr_endpoint(
     width: int = Form(...),
     height: int = Form(...),
     start_time: Optional[int] = Form(0),
-    end_time: Optional[int] = Form(None)
+    end_time: Optional[int] = Form(None),
+    full_screen_ocr: bool = Form(False),
+    mask_x: Optional[int] = Form(None),
+    mask_y: Optional[int] = Form(None),
+    mask_width: Optional[int] = Form(None),
+    mask_height: Optional[int] = Form(None),
 ):
     # 비디오 파일 존재 여부 및 재생 시간(초) 계산
     video_path = os.path.join(UPLOAD_DIR, video_filename)
@@ -347,6 +357,8 @@ async def start_ocr_endpoint(
     
     frame_count = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
     fps = cap.get(cv2.CAP_PROP_FPS)
+    frame_width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+    frame_height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
     if fps <= 0:
         cap.release()
         raise HTTPException(status_code=400, detail="FPS 값을 확인할 수 없습니다.")
@@ -371,6 +383,32 @@ async def start_ocr_endpoint(
             raise HTTPException(status_code=400, detail="종료 시간은 시작 시간보다 커야 합니다.")
     
     # 작업(task) 생성
+    has_any_mask_value = any(value is not None for value in (mask_x, mask_y, mask_width, mask_height))
+    has_all_mask_values = all(value is not None for value in (mask_x, mask_y, mask_width, mask_height))
+    if has_any_mask_value and not has_all_mask_values:
+        raise HTTPException(status_code=400, detail="Mask coordinates must include x, y, width, and height.")
+
+    has_mask = has_all_mask_values
+    is_full_screen_area = (
+        x <= 0 and
+        y <= 0 and
+        x + width >= frame_width and
+        y + height >= frame_height
+    )
+
+    if has_mask and not full_screen_ocr:
+        raise HTTPException(status_code=400, detail="Mask is only supported when full_screen_ocr is enabled.")
+    if has_mask and not is_full_screen_area:
+        raise HTTPException(status_code=400, detail="Mask is only supported for full-screen OCR areas.")
+
+    if has_mask:
+        if mask_width <= 0 or mask_height <= 0:
+            raise HTTPException(status_code=400, detail="Mask width and height must be greater than 0.")
+        if mask_x < 0 or mask_y < 0:
+            raise HTTPException(status_code=400, detail="Mask x and y must be greater than or equal to 0.")
+        if mask_x + mask_width > frame_width or mask_y + mask_height > frame_height:
+            raise HTTPException(status_code=400, detail="Mask area must stay within the video frame.")
+
     task_id = str(uuid.uuid4())
     tasks[task_id] = Task(
         task_id=task_id,
@@ -385,6 +423,11 @@ async def start_ocr_endpoint(
         ocr_height=height,
         ocr_start_time=start_time,
         ocr_end_time=end_time,
+        full_screen_ocr=full_screen_ocr,
+        mask_x=mask_x if has_mask else None,
+        mask_y=mask_y if has_mask else None,
+        mask_width=mask_width if has_mask else None,
+        mask_height=mask_height if has_mask else None,
     )
 
     # 생성된 작업을 즉시 브로드캐스트하여 클라이언트에 표시
@@ -395,7 +438,21 @@ async def start_ocr_endpoint(
     
     return {"task_id": task_id}
 
-async def run_ocr_task(task_id, video_filename, x, y, width, height, start_time, end_time):
+async def run_ocr_task(
+    task_id,
+    video_filename,
+    x,
+    y,
+    width,
+    height,
+    start_time,
+    end_time,
+    full_screen_ocr=False,
+    mask_x=None,
+    mask_y=None,
+    mask_width=None,
+    mask_height=None,
+):
     print(f"[시작] {task_id} - {video_filename}")
 
     task = tasks[task_id]
@@ -428,7 +485,20 @@ async def run_ocr_task(task_id, video_filename, x, y, width, height, start_time,
         task.status = Status.running
         task.task_start_time = None
         await broadcast_update(task)
-        async for progress in process_ocr(video_filename, x, y, width, height, start_time, end_time):
+        async for progress in process_ocr(
+            video_filename,
+            x,
+            y,
+            width,
+            height,
+            start_time,
+            end_time,
+            full_screen_ocr=full_screen_ocr,
+            mask_x=mask_x,
+            mask_y=mask_y,
+            mask_width=mask_width,
+            mask_height=mask_height,
+        ):
             # Check if cancellation was requested.
             if task.status == Status.cancelling:
                 task.status = Status.cancelled
@@ -492,6 +562,11 @@ async def start_next_task():
             next_task.ocr_height,
             next_task.ocr_start_time,
             next_task.ocr_end_time,
+            next_task.full_screen_ocr,
+            next_task.mask_x,
+            next_task.mask_y,
+            next_task.mask_width,
+            next_task.mask_height,
         )
     )
 

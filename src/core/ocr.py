@@ -85,8 +85,17 @@ def get_last_processed_frame_number(csv_path, fieldnames) -> int:
 def frame_batch_generator(
     cap: cv2.VideoCapture,
     x, y, width, height,
-    end_frame: int = None
+    full_screen_ocr: bool = False,
+    end_frame: int = None,
+    mask_x: int | None = None,
+    mask_y: int | None = None,
+    mask_width: int | None = None,
+    mask_height: int | None = None,
 ) -> Generator[List, None, None]:
+    has_mask = all(value is not None for value in (mask_x, mask_y, mask_width, mask_height))
+    if has_mask and not full_screen_ocr:
+        raise ValueError("Mask is only supported when full_screen_ocr is enabled.")
+
     while True:
         # 프레임 읽기
         ret, frame = cap.read()
@@ -98,10 +107,27 @@ def frame_batch_generator(
             break
         
         # 이미지 크롭
-        cropped_frame = frame[y:y+height, x:x+width]
+        if full_screen_ocr:
+            working_frame = frame
+        else:
+            working_frame = frame[y:y+height, x:x+width]
+
+        if has_mask:
+            mask_left = max(mask_x, 0)
+            mask_top = max(mask_y, 0)
+            mask_right = min(mask_left + mask_width, working_frame.shape[1])
+            mask_bottom = min(mask_top + mask_height, working_frame.shape[0])
+            if mask_left < mask_right and mask_top < mask_bottom:
+                cv2.rectangle(
+                    working_frame,
+                    (mask_left, mask_top),
+                    (mask_right, mask_bottom),
+                    color=(0, 0, 0),
+                    thickness=-1,
+                )
 
         # 이미지를 base64로 인코딩
-        rgb_frame = cv2.cvtColor(cropped_frame, cv2.COLOR_BGR2RGB)
+        rgb_frame = cv2.cvtColor(working_frame, cv2.COLOR_BGR2RGB)
         success, buffer = cv2.imencode('.jpg', rgb_frame)
         img_base64 = base64.b64encode(buffer).decode("utf-8")
 
@@ -141,8 +167,17 @@ async def process_ocr(
     video_filename,
     x, y, width, height,
     start_time=0,
-    end_time=None
+    end_time=None,
+    full_screen_ocr=False,
+    mask_x=None,
+    mask_y=None,
+    mask_width=None,
+    mask_height=None,
 ):
+    has_any_mask_value = any(value is not None for value in (mask_x, mask_y, mask_width, mask_height))
+    if has_any_mask_value and not full_screen_ocr:
+        raise ValueError("Mask is only supported when full_screen_ocr is enabled.")
+
     # 파일 경로 정보 초기화
     UPLOAD_DIR = "uploads"
     video_path = os.path.join(UPLOAD_DIR, video_filename)
@@ -189,7 +224,19 @@ async def process_ocr(
         heap: list[tuple[int, str]] = []
         next_frame_to_write = start_ocr_frame + 1
 
-        for frame_idx, img_b64 in frame_batch_generator(cap, x, y, width, height, end_frame):
+        for frame_idx, img_b64 in frame_batch_generator(
+            cap,
+            x,
+            y,
+            width,
+            height,
+            full_screen_ocr=full_screen_ocr,
+            end_frame=end_frame,
+            mask_x=mask_x,
+            mask_y=mask_y,
+            mask_width=mask_width,
+            mask_height=mask_height,
+        ):
             # 새 작업 추가
             running.add(
                 asyncio.create_task(

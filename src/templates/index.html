@@ -45,14 +45,13 @@
                 <div class="col-md-12 position-relative">
                     <div id="video-container" class="position-relative">
                         <video id="video" controls class="w-100" disablePictureInPicture controlslist="nofullscreen nodownload noplaybackrate"></video>
-                        <!-- 바운딩 박스 -->
                         <div id="bounding-box">
-                            <!-- 드래그 핸들 -->
                             <div class="handle top"></div>
                             <div class="handle right"></div>
                             <div class="handle bottom"></div>
                             <div class="handle left"></div>
                         </div>
+                        <div id="mask-box"></div>
                     </div>
                 </div>
             </div>
@@ -65,7 +64,28 @@
                     <label for="endTimeInput">OCR 종료 시간 (초):</label>
                     <input type="text" id="endTimeInput" placeholder="mm:ss" value="00:00" class="form-control">
                 </div>
-                <div class="col-md-8"></div>
+                <div class="col-md-8">
+                    <div class="form-check mt-4">
+                        <input class="form-check-input" type="checkbox" id="fullScreenOcrToggle">
+                        <label class="form-check-label" for="fullScreenOcrToggle">
+                            Full-screen OCR
+                        </label>
+                    </div>
+                    <div id="mask-controls" class="mt-2">
+                        <div class="form-check">
+                            <input class="form-check-input" type="checkbox" id="maskToggle" disabled>
+                            <label class="form-check-label" for="maskToggle">
+                                Use black mask area (full-screen OCR only)
+                            </label>
+                        </div>
+                        <button type="button" id="clearMaskBtn" class="btn btn-outline-secondary btn-sm mt-2" disabled>
+                            Clear mask area
+                        </button>
+                        <small id="maskHelpText" class="form-text text-muted">
+                            Enable mask and drag on video to create one black mask rectangle.
+                        </small>
+                    </div>
+                </div>
             </div>
             <div class="row mt-4 mb-4">
                 <div class="col-md-12">

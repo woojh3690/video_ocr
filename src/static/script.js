@@ -1,14 +1,29 @@
-let video = document.getElementById('video');
-let startOcrBtn = document.getElementById('start-ocr-btn');
-let ocrProgressContainer = document.getElementById('ocr-progress-container');
+const video = document.getElementById('video');
+const startOcrBtn = document.getElementById('start-ocr-btn');
+const boundingBox = document.getElementById('bounding-box');
+const handles = document.querySelectorAll('.handle');
+const maskBox = document.getElementById('mask-box');
 
-// 현재 실행 중인 작업이 있는지 여부
-let isTaskRunning = false;
-// 각 작업의 상태 기록
+const fileList = document.getElementById('file-list');
+const currentPathElem = document.getElementById('current-path');
+const taskListView = document.getElementById('task-list-view');
+const ocrCreationView = document.getElementById('ocr-creation-view');
+const taskListTableBody = document.querySelector('#task-list tbody');
+const videoContainer = document.getElementById('video-container');
+
+const newOcrBtn = document.getElementById('new-ocr-btn');
+const backToListBtn = document.getElementById('back-to-list-btn');
+
+const fullScreenOcrToggle = document.getElementById('fullScreenOcrToggle');
+const maskToggle = document.getElementById('maskToggle');
+const clearMaskBtn = document.getElementById('clearMaskBtn');
+const maskControls = document.getElementById('mask-controls');
+
+let vfilename = null;
+let currentPath = '';
+
 const taskStatusMap = {};
-
-let boundingBox = document.getElementById('bounding-box');
-let handles = document.querySelectorAll('.handle');
+let isTaskRunning = false;
 
 let dragging = false;
 let dragDirection = '';
@@ -16,34 +31,25 @@ let startY = 0;
 let startX = 0;
 let startHeight = 0;
 let startWidth = 0;
-let videoWidth = 0;
-let videoHeight = 0;
 let startTop = 0;
 let startLeft = 0;
 
-let vfilename = null;
-let fileBrowser = document.getElementById('file-browser');
-let fileList = document.getElementById('file-list');
-let currentPathElem = document.getElementById('current-path');
-let currentPath = '';
+let maskDrawing = false;
+let maskStartX = 0;
+let maskStartY = 0;
 
-// DOM 요소들: 작업 목록 뷰와 OCR 생성 뷰
-const taskListView = document.getElementById('task-list-view');
-const ocrCreationView = document.getElementById('ocr-creation-view');
-const taskListTableBody = document.querySelector('#task-list tbody');
-
-const newOcrBtn = document.getElementById('new-ocr-btn');
-const backToListBtn = document.getElementById('back-to-list-btn');
+const MIN_BOX_SIZE = 20;
+const MIN_MASK_SIZE = 10;
 
 // WebSocket 연결 (단일 연결)
-let ws = new WebSocket(`ws://${location.host}/ws/tasks`);
+const ws = new WebSocket(`ws://${location.host}/ws/tasks`);
 
 ws.onopen = () => {
     console.log("WebSocket 연결 성공");
 };
 
 ws.onmessage = (event) => {
-    let message = JSON.parse(event.data);
+    const message = JSON.parse(event.data);
     // message는 { task_id, progress, status, estimated_completion, error, ... } 형태
     updateTaskRow(message);
 };
@@ -54,39 +60,137 @@ ws.onerror = (err) => {
 
 // 작업 목록 초기 로드
 fetch('/tasks/')
-    .then(response => response.json())
-    .then(data => {
+    .then((response) => response.json())
+    .then((data) => {
         // data는 tasks 딕셔너리 형태 { task_id: { ... }, ... }
-        for (let taskId in data) {
-            let task = data[taskId];
+        for (const taskId in data) {
+            const task = data[taskId];
             task.task_id = taskId;
             updateTaskRow(task);
         }
     })
-    .catch(err => console.error(err));
+    .catch((err) => console.error(err));
 
 // --- 함수 정의 ---
+function clamp(value, min, max) {
+    return Math.min(Math.max(value, min), max);
+}
 
 function encodePath(path) {
     return path.split('/').map(encodeURIComponent).join('/');
 }
 
+function getVideoDisplayWidth() {
+    return video.clientWidth || 0;
+}
+
+function getVideoDisplayHeight() {
+    return video.clientHeight || 0;
+}
+
+function getPointInVideo(clientX, clientY) {
+    const rect = video.getBoundingClientRect();
+    if (!rect.width || !rect.height) {
+        return null;
+    }
+
+    const x = clamp(clientX - rect.left, 0, rect.width);
+    const y = clamp(clientY - rect.top, 0, rect.height);
+    return { x, y };
+}
+
+function setBoundingBoxRect(x, y, width, height) {
+    boundingBox.style.left = `${x}px`;
+    boundingBox.style.top = `${y}px`;
+    boundingBox.style.width = `${Math.max(width, MIN_BOX_SIZE)}px`;
+    boundingBox.style.height = `${Math.max(height, MIN_BOX_SIZE)}px`;
+}
+
+function resetBoundingBoxToFullVideo() {
+    const width = getVideoDisplayWidth();
+    const height = getVideoDisplayHeight();
+    setBoundingBoxRect(0, 0, width, height);
+}
+
+function clearMaskBox() {
+    maskBox.style.display = 'none';
+    maskBox.style.left = '0px';
+    maskBox.style.top = '0px';
+    maskBox.style.width = '0px';
+    maskBox.style.height = '0px';
+}
+
+function setMaskRect(x, y, width, height) {
+    maskBox.style.display = 'block';
+    maskBox.style.left = `${x}px`;
+    maskBox.style.top = `${y}px`;
+    maskBox.style.width = `${width}px`;
+    maskBox.style.height = `${height}px`;
+}
+
+function hasMaskRect() {
+    return maskBox.style.display === 'block' && maskBox.offsetWidth >= MIN_MASK_SIZE && maskBox.offsetHeight >= MIN_MASK_SIZE;
+}
+
+function isFullScreenOcrEnabled() {
+    return Boolean(fullScreenOcrToggle.checked);
+}
+
+function isMaskDrawingEnabled() {
+    return isFullScreenOcrEnabled() && Boolean(maskToggle.checked);
+}
+
+function updateBoundingBoxInteraction() {
+    const locked = isFullScreenOcrEnabled();
+    boundingBox.classList.toggle('locked', locked);
+    handles.forEach((handle) => {
+        handle.style.display = locked ? 'none' : 'block';
+    });
+    if (locked) {
+        resetBoundingBoxToFullVideo();
+    }
+}
+
+function updateMaskControls() {
+    const fullScreenEnabled = isFullScreenOcrEnabled();
+
+    maskToggle.disabled = !fullScreenEnabled;
+    if (!fullScreenEnabled) {
+        maskToggle.checked = false;
+        clearMaskBox();
+    }
+
+    const drawingEnabled = isMaskDrawingEnabled();
+    clearMaskBtn.disabled = !drawingEnabled;
+
+    videoContainer.classList.toggle('mask-draw-enabled', drawingEnabled);
+    maskControls.classList.toggle('mask-disabled', !fullScreenEnabled);
+
+    if (!drawingEnabled) {
+        maskDrawing = false;
+    }
+}
+
 function loadDirectory(path = '') {
     fetch(`/browse/?path=${encodeURIComponent(path)}`)
-        .then(resp => resp.json())
-        .then(data => {
+        .then((resp) => resp.json())
+        .then((data) => {
             currentPath = data.path;
-            currentPathElem.textContent = '/' + (currentPath ? currentPath : '');
+            currentPathElem.textContent = '/' + (currentPath || '');
             fileList.innerHTML = '';
+
             if (currentPath) {
                 const up = document.createElement('li');
                 up.className = 'list-group-item list-group-item-action browser-item';
+
                 const upIcon = document.createElement('span');
                 upIcon.className = 'item-icon';
                 upIcon.textContent = '\u2191';
+
                 const upLabel = document.createElement('span');
                 upLabel.className = 'item-label';
                 upLabel.textContent = '..';
+
                 up.appendChild(upIcon);
                 up.appendChild(upLabel);
                 up.onclick = () => {
@@ -94,19 +198,25 @@ function loadDirectory(path = '') {
                     parts.pop();
                     loadDirectory(parts.join('/'));
                 };
+
                 fileList.appendChild(up);
             }
-            data.entries.forEach(entry => {
+
+            data.entries.forEach((entry) => {
                 const item = document.createElement('li');
                 item.className = 'list-group-item list-group-item-action browser-item';
+
                 const icon = document.createElement('span');
                 icon.className = 'item-icon';
                 icon.textContent = entry.is_dir ? '\uD83D\uDCC1' : '\uD83D\uDCC4';
+
                 const label = document.createElement('span');
                 label.className = 'item-label';
                 label.textContent = entry.name + (entry.is_dir ? '/' : '');
+
                 item.appendChild(icon);
                 item.appendChild(label);
+
                 if (entry.is_dir) {
                     item.onclick = () => {
                         loadDirectory(currentPath ? `${currentPath}/${entry.name}` : entry.name);
@@ -116,35 +226,37 @@ function loadDirectory(path = '') {
                         selectVideo(currentPath ? `${currentPath}/${entry.name}` : entry.name);
                     };
                 }
+
                 fileList.appendChild(item);
             });
+        })
+        .catch((err) => {
+            console.error('Failed to browse directory:', err);
         });
 }
 
 function selectVideo(path) {
     const videoExtensions = ['.mp4', '.avi', '.mov', '.mkv', '.webm', '.mpg', '.mpeg', '.wmv'];
     const lower = path.toLowerCase();
-    const isVideo = videoExtensions.some(ext => lower.endsWith(ext));
+    const isVideo = videoExtensions.some((ext) => lower.endsWith(ext));
     if (!isVideo) {
         alert('비디오 파일을 선택해주세요.');
         return;
     }
+
     vfilename = path;
-    const targetDiv = document.querySelector('#video-container');
-    targetDiv.style.display = 'block';
-    let url = `/videos/${encodePath(path)}`;
-    video.src = url;
+    videoContainer.style.display = 'block';
+    video.src = `/videos/${encodePath(path)}`;
     video.load();
-    video.onloadedmetadata = function() {
-        videoWidth = video.videoWidth;
-        videoHeight = video.videoHeight;
-        let videoContainer = document.getElementById('video-container');
-        videoContainer.style.width = video.clientWidth + 'px';
-        videoContainer.style.height = video.clientHeight + 'px';
-        boundingBox.style.top = '0px';
-        boundingBox.style.left = '0px';
-        boundingBox.style.width = video.clientWidth + 'px';
-        boundingBox.style.height = (video.clientHeight - video.controls.offsetHeight) + 'px';
+
+    video.onloadedmetadata = function () {
+        videoContainer.style.width = `${video.clientWidth}px`;
+        videoContainer.style.height = `${video.clientHeight}px`;
+
+        resetBoundingBoxToFullVideo();
+        clearMaskBox();
+        updateBoundingBoxInteraction();
+        updateMaskControls();
     };
 }
 
@@ -154,10 +266,10 @@ function updateRunningStatus(taskId, status) {
     } else {
         taskStatusMap[taskId] = status;
     }
-    isTaskRunning = Object.values(taskStatusMap).some(s => s === 'running');
+
+    isTaskRunning = Object.values(taskStatusMap).some((s) => s === 'running');
 }
 
-// 작업 제어 버튼을 상태에 맞게 설정
 function setActionButtons(row, status, taskId) {
     const cell = row.querySelector('.action-cell');
     cell.innerHTML = '';
@@ -165,63 +277,55 @@ function setActionButtons(row, status, taskId) {
     if (status === 'running' || status === 'waiting') {
         const cancelBtn = document.createElement('button');
         cancelBtn.className = 'btn btn-warning btn-sm cancel-btn';
-        cancelBtn.innerText = '중지';
-        cancelBtn.onclick = function() {
-            cancelTask(taskId);
-        };
+        cancelBtn.innerText = 'Cancel';
+        cancelBtn.onclick = () => cancelTask(taskId);
         cell.appendChild(cancelBtn);
-    } else if (status === 'cancelled' || status === 'cancelling' || status === 'error') {
+        return;
+    }
+
+    if (status === 'cancelled' || status === 'cancelling' || status === 'error') {
         const resumeBtn = document.createElement('button');
         resumeBtn.className = 'btn btn-primary btn-sm resume-btn mr-1';
-        resumeBtn.innerText = '재개';
-        resumeBtn.onclick = function() {
-            resumeTask(taskId);
-        };
+        resumeBtn.innerText = 'Resume';
+        resumeBtn.onclick = () => resumeTask(taskId);
 
         const deleteBtn = document.createElement('button');
         deleteBtn.className = 'btn btn-danger btn-sm delete-btn';
-        deleteBtn.innerText = '삭제';
-        deleteBtn.onclick = function() {
-            deleteTask(taskId);
-        };
+        deleteBtn.innerText = 'Delete';
+        deleteBtn.onclick = () => deleteTask(taskId);
 
         cell.appendChild(resumeBtn);
         cell.appendChild(deleteBtn);
-    } else {
-        const deleteBtn = document.createElement('button');
-        deleteBtn.className = 'btn btn-danger btn-sm delete-btn';
-        deleteBtn.innerText = '삭제';
-        deleteBtn.onclick = function() {
-            deleteTask(taskId);
-        };
-        cell.appendChild(deleteBtn);
+        return;
     }
+
+    const deleteBtn = document.createElement('button');
+    deleteBtn.className = 'btn btn-danger btn-sm delete-btn';
+    deleteBtn.innerText = 'Delete';
+    deleteBtn.onclick = () => deleteTask(taskId);
+    cell.appendChild(deleteBtn);
 }
 
-// 작업 목록 테이블의 row 업데이트 (존재하면 수정, 없으면 생성)
 function updateTaskRow(task) {
-    let taskId = task.task_id;
-    let progress = task.progress || 0;
-    let status = task.status || "";
-    let statusHtml;
-    if (status === 'completed') {
-        statusHtml = 'completed';
-    } else {
-        statusHtml = (status === 'waiting') ? '대기' : status;
-        if (task.error) {
-            statusHtml += `: ${task.error}`;
-        }
+    const taskId = task.task_id;
+    const progress = task.progress || 0;
+    const status = task.status || '';
+
+    let statusText = status;
+    if (status === 'waiting') {
+        statusText = 'waiting';
     }
-    let estimated = (typeof task.estimated_completion !== "undefined") ? task.estimated_completion : "TBD";
-    let videoFile = task.video_filename || "";
+    if (task.error) {
+        statusText += `: ${task.error}`;
+    }
 
-    // 기존 row 검색
-    let row = document.getElementById("task-row-" + taskId);
+    const estimated = typeof task.estimated_completion !== 'undefined' ? task.estimated_completion : 'TBD';
+    const videoFile = task.video_filename || '';
 
+    let row = document.getElementById(`task-row-${taskId}`);
     if (!row) {
-        // row가 없으면 새로 생성
-        row = document.createElement("tr");
-        row.id = "task-row-" + taskId;
+        row = document.createElement('tr');
+        row.id = `task-row-${taskId}`;
         row.innerHTML = `
             <td class="video-file"></td>
             <td class="progress-cell">
@@ -229,99 +333,94 @@ function updateTaskRow(task) {
                     <div class="progress-bar" role="progressbar" style="width: ${progress}%;" aria-valuenow="${progress}" aria-valuemin="0" aria-valuemax="100"></div>
                 </div>
             </td>
-            <td class="status-cell">${statusHtml}</td>
-            <td class="estimated-cell">${estimated}</td>
+            <td class="status-cell"></td>
+            <td class="estimated-cell"></td>
             <td class="action-cell"></td>
         `;
-        const videoCell = row.querySelector('.video-file');
-        videoCell.textContent = videoFile;
-        videoCell.title = videoFile;
         taskListTableBody.appendChild(row);
-        setActionButtons(row, status, taskId);
-        updateRunningStatus(taskId, status);
-    } else {
-        // 기존 row가 있으면 변경된 부분만 업데이트
-        const videoCell = row.querySelector('.video-file');
-        videoCell.textContent = videoFile;
-        videoCell.title = videoFile;
-
-        let progressBar = row.querySelector('.progress-bar');
-        progressBar.style.width = `${progress}%`;
-        progressBar.setAttribute('aria-valuenow', progress);
-
-        row.querySelector('.status-cell').innerHTML = statusHtml;
-        row.querySelector('.estimated-cell').innerText = estimated;
-
-        // 버튼 업데이트
-        setActionButtons(row, status, taskId);
-        updateRunningStatus(taskId, status);
     }
+
+    const videoCell = row.querySelector('.video-file');
+    videoCell.textContent = videoFile;
+    videoCell.title = videoFile;
+
+    const progressBar = row.querySelector('.progress-bar');
+    progressBar.style.width = `${progress}%`;
+    progressBar.setAttribute('aria-valuenow', String(progress));
+
+    row.querySelector('.status-cell').innerText = statusText;
+    row.querySelector('.estimated-cell').innerText = estimated;
+
+    setActionButtons(row, status, taskId);
+    updateRunningStatus(taskId, status);
 }
 
-// CANCEL 요청을 보내고 작업 중지
 function cancelTask(taskId) {
-    let formData = new FormData();
+    const formData = new FormData();
     formData.append('task_id', taskId);
-    fetch(`/cancel_ocr/`, {
+
+    fetch('/cancel_ocr/', {
         method: 'POST',
-        body: formData
+        body: formData,
     })
-    .then(response => response.json())
-    .then(data => {
-        console.log(data.detail);
-    })
-    .catch(err => console.error(err));
+        .then((response) => response.json())
+        .then((data) => console.log(data.detail))
+        .catch((err) => console.error(err));
 }
 
-// RESUME 요청을 보내고 작업 재시작
 function resumeTask(taskId) {
-    let formData = new FormData();
+    const formData = new FormData();
     formData.append('task_id', taskId);
-    fetch(`/resume_ocr/`, {
+
+    fetch('/resume_ocr/', {
         method: 'POST',
-        body: formData
+        body: formData,
     })
-    .then(async response => {
-        let data = await response.json();
-        if (!response.ok) {
-            if (data.detail === 'RESUME_NOT_READY') {
-                alert('아직 테스트가 준비되지 않았습니다.');
-            } else {
-                alert('OCR 재개 중 오류 발생: ' + data.detail);
+        .then(async (response) => {
+            const data = await response.json();
+            if (!response.ok) {
+                if (data.detail === 'RESUME_NOT_READY') {
+                    alert('Task is not ready to resume yet.');
+                } else {
+                    alert(`OCR resume failed: ${data.detail}`);
+                }
+                return;
             }
-            return;
-        }
-        console.log(data.detail);
-    })
-    .catch(err => console.error(err));
+
+            console.log(data.detail);
+        })
+        .catch((err) => console.error(err));
 }
 
-// DELETE 요청을 보내고 row 제거
 function deleteTask(taskId) {
     fetch(`/tasks/${taskId}`, {
-        method: 'DELETE'
+        method: 'DELETE',
     })
-    .then(response => response.json())
-    .then(data => {
-        // 삭제 성공하면 테이블 row 제거
-        let row = document.getElementById("task-row-" + taskId);
-        if (row) {
-            row.remove();
-        }
-        delete taskStatusMap[taskId];
-        updateRunningStatus(taskId, undefined);
-    })
-    .catch(err => console.error(err));
+        .then((response) => response.json())
+        .then(() => {
+            const row = document.getElementById(`task-row-${taskId}`);
+            if (row) {
+                row.remove();
+            }
+            delete taskStatusMap[taskId];
+            updateRunningStatus(taskId, undefined);
+        })
+        .catch((err) => console.error(err));
 }
 
-// 뷰 전환 함수
 function switchToOcrCreationView() {
     taskListView.style.display = 'none';
     ocrCreationView.style.display = 'block';
     loadDirectory('');
-    const targetDiv = document.querySelector('#video-container');
-    targetDiv.style.display = 'none';
+
+    videoContainer.style.display = 'none';
     vfilename = null;
+
+    fullScreenOcrToggle.checked = false;
+    maskToggle.checked = false;
+    clearMaskBox();
+    updateBoundingBoxInteraction();
+    updateMaskControls();
 }
 
 function switchToTaskListView() {
@@ -330,161 +429,298 @@ function switchToTaskListView() {
 }
 
 // 이벤트: "새 OCR 작업 추가" 버튼 -> OCR 생성 뷰로 전환
-newOcrBtn.addEventListener('click', function() {
+newOcrBtn.addEventListener('click', () => {
     switchToOcrCreationView();
 });
 
 // 이벤트: "작업 큐로 돌아가기" 버튼 -> 작업 목록 뷰로 전환
-backToListBtn.addEventListener('click', function() {
+backToListBtn.addEventListener('click', () => {
     switchToTaskListView();
+});
+
+// 이벤트: 전체 화면 OCR 토글 변경
+fullScreenOcrToggle.addEventListener('change', () => {
+    updateBoundingBoxInteraction();
+    updateMaskControls();
+});
+
+maskToggle.addEventListener('change', () => {
+    if (!isMaskDrawingEnabled()) {
+        clearMaskBox();
+    }
+    updateMaskControls();
+});
+
+clearMaskBtn.addEventListener('click', () => {
+    clearMaskBox();
 });
 
 
 
 
 // 드래그 핸들 이벤트 처리
-handles.forEach(function(handle) {
-    handle.addEventListener('mousedown', function(e) {
+handles.forEach((handle) => {
+    handle.addEventListener('mousedown', (e) => {
+        if (isFullScreenOcrEnabled()) {
+            return;
+        }
+
         dragging = true;
-        dragDirection = e.target.classList.contains('top') ? 'top' :
-                        e.target.classList.contains('bottom') ? 'bottom' :
-                        e.target.classList.contains('left') ? 'left' :
-                        e.target.classList.contains('right') ? 'right' : '';
+        dragDirection =
+            e.target.classList.contains('top') ? 'top' :
+            e.target.classList.contains('bottom') ? 'bottom' :
+            e.target.classList.contains('left') ? 'left' :
+            e.target.classList.contains('right') ? 'right' : '';
+
         startY = e.clientY;
         startX = e.clientX;
         startHeight = boundingBox.offsetHeight;
         startWidth = boundingBox.offsetWidth;
         startTop = boundingBox.offsetTop;
         startLeft = boundingBox.offsetLeft;
+
         e.preventDefault();
     });
 });
 
-document.addEventListener('mousemove', function(e) {
+videoContainer.addEventListener('mousedown', (e) => {
+    if (!isMaskDrawingEnabled()) {
+        return;
+    }
+
+    if (e.button !== 0) {
+        return;
+    }
+
+    if (e.target.closest('.handle')) {
+        return;
+    }
+
+    const point = getPointInVideo(e.clientX, e.clientY);
+    if (!point) {
+        return;
+    }
+
+    maskDrawing = true;
+    maskStartX = point.x;
+    maskStartY = point.y;
+    setMaskRect(maskStartX, maskStartY, 1, 1);
+    e.preventDefault();
+});
+
+function updateBoundingBoxOnDrag(clientX, clientY) {
+    const dy = clientY - startY;
+    const dx = clientX - startX;
+
+    if (dragDirection === 'top') {
+        const maxShift = startHeight - MIN_BOX_SIZE;
+        const appliedShift = clamp(dy, -startTop, maxShift);
+        boundingBox.style.top = `${startTop + appliedShift}px`;
+        boundingBox.style.height = `${startHeight - appliedShift}px`;
+        return;
+    }
+
+    if (dragDirection === 'bottom') {
+        const maxHeight = getVideoDisplayHeight() - startTop;
+        const newHeight = clamp(startHeight + dy, MIN_BOX_SIZE, maxHeight);
+        boundingBox.style.height = `${newHeight}px`;
+        return;
+    }
+
+    if (dragDirection === 'left') {
+        const maxShift = startWidth - MIN_BOX_SIZE;
+        const appliedShift = clamp(dx, -startLeft, maxShift);
+        boundingBox.style.left = `${startLeft + appliedShift}px`;
+        boundingBox.style.width = `${startWidth - appliedShift}px`;
+        return;
+    }
+
+    if (dragDirection === 'right') {
+        const maxWidth = getVideoDisplayWidth() - startLeft;
+        const newWidth = clamp(startWidth + dx, MIN_BOX_SIZE, maxWidth);
+        boundingBox.style.width = `${newWidth}px`;
+    }
+}
+
+function updateMaskOnDraw(clientX, clientY) {
+    const point = getPointInVideo(clientX, clientY);
+    if (!point) {
+        return;
+    }
+
+    const left = Math.min(maskStartX, point.x);
+    const top = Math.min(maskStartY, point.y);
+    const width = Math.abs(point.x - maskStartX);
+    const height = Math.abs(point.y - maskStartY);
+
+    setMaskRect(left, top, width, height);
+}
+
+document.addEventListener('mousemove', (e) => {
     if (dragging) {
-        let dy = e.clientY - startY;
-        let dx = e.clientX - startX;
-        if (dragDirection === 'top') {
-            let newHeight = startHeight - dy;
-            let newTop = startTop + dy;
-            if (newHeight > 20 && newTop >= 0) {
-                boundingBox.style.height = newHeight + 'px';
-                boundingBox.style.top = newTop + 'px';
-            } else if (newTop < 0) {
-                boundingBox.style.height = startHeight + startTop + 'px';
-                boundingBox.style.top = '0px';
-            }
-        } else if (dragDirection === 'bottom') {
-            let newHeight = startHeight + dy;
-            let maxHeight = video.clientHeight - startTop;
-            if (newHeight > 20 && newHeight <= maxHeight) {
-                boundingBox.style.height = newHeight + 'px';
-            } else if (newHeight > maxHeight) {
-                boundingBox.style.height = maxHeight + 'px';
-            }
-        } else if (dragDirection === 'left') {
-            let newWidth = startWidth - dx;
-            let newLeft = startLeft + dx;
-            if (newWidth > 20 && newLeft >= 0) {
-                boundingBox.style.width = newWidth + 'px';
-                boundingBox.style.left = newLeft + 'px';
-            } else if (newLeft < 0) {
-                boundingBox.style.width = startWidth + startLeft + 'px';
-                boundingBox.style.left = '0px';
-            }
-        } else if (dragDirection === 'right') {
-            let newWidth = startWidth + dx;
-            let maxWidth = video.clientWidth - startLeft;
-            if (newWidth > 20 && newWidth <= maxWidth) {
-                boundingBox.style.width = newWidth + 'px';
-            } else if (newWidth > maxWidth) {
-                boundingBox.style.width = maxWidth + 'px';
-            }
-        }
+        updateBoundingBoxOnDrag(e.clientX, e.clientY);
+        e.preventDefault();
+    }
+
+    if (maskDrawing) {
+        updateMaskOnDraw(e.clientX, e.clientY);
         e.preventDefault();
     }
 });
 
-document.addEventListener('mouseup', function(e) {
+document.addEventListener('mouseup', () => {
     dragging = false;
     dragDirection = '';
+
+    if (maskDrawing) {
+        maskDrawing = false;
+        if (!hasMaskRect()) {
+            clearMaskBox();
+        }
+    }
 });
 
 // mm:ss 형식의 문자열을 초 단위로 변환하는 함수 (예: "02:30" -> 150초)
 function parseTimeString(timeStr) {
-    const parts = timeStr.split(':');
-    if (parts.length === 2) {
-        const minutes = parseInt(parts[0], 10);
-        const seconds = parseFloat(parts[1]);
-        if (isNaN(minutes) || isNaN(seconds)) {
-            return 0;
-        }
-        return minutes * 60 + seconds;
+    const parts = String(timeStr || '').split(':');
+    if (parts.length !== 2) {
+        return 0;
     }
-    return 0;
+
+    const minutes = parseInt(parts[0], 10);
+    const seconds = parseFloat(parts[1]);
+    if (Number.isNaN(minutes) || Number.isNaN(seconds)) {
+        return 0;
+    }
+
+    return minutes * 60 + seconds;
+}
+
+function getBoundingBoxInSourcePixels(scaleX, scaleY) {
+    const videoRect = video.getBoundingClientRect();
+    const boxRect = boundingBox.getBoundingClientRect();
+
+    const x = Math.round((boxRect.left - videoRect.left) * scaleX);
+    const y = Math.round((boxRect.top - videoRect.top) * scaleY);
+    const width = Math.round(boxRect.width * scaleX);
+    const height = Math.round(boxRect.height * scaleY);
+
+    return { x, y, width, height };
+}
+
+function getMaskBoxInSourcePixels(scaleX, scaleY) {
+    if (!hasMaskRect()) {
+        return null;
+    }
+
+    const videoRect = video.getBoundingClientRect();
+    const boxRect = maskBox.getBoundingClientRect();
+
+    const x = Math.round((boxRect.left - videoRect.left) * scaleX);
+    const y = Math.round((boxRect.top - videoRect.top) * scaleY);
+    const width = Math.round(boxRect.width * scaleX);
+    const height = Math.round(boxRect.height * scaleY);
+
+    return {
+        x: Math.max(0, x),
+        y: Math.max(0, y),
+        width: Math.max(0, width),
+        height: Math.max(0, height),
+    };
 }
 
 // OCR 시작
 // POST start_ocr를 호출하면 task_id를 받고, WebSocket 업데이트로 진행률이 표시됨.
-startOcrBtn.addEventListener('click', async function() {
-    // 바운딩 박스의 위치와 크기 계산
-    let videoRect = video.getBoundingClientRect();
-    let boxRect = boundingBox.getBoundingClientRect();
-    let x = boxRect.left - videoRect.left;
-    let y = boxRect.top - videoRect.top;
-    let width = boxRect.width;
-    let height = boxRect.height;
-    // 비율 조정
-    let scaleX = video.videoWidth / video.clientWidth;
-    let scaleY = video.videoHeight / video.clientHeight;
-    x = Math.round(x * scaleX);
-    y = Math.round(y * scaleY);
-    width = Math.round(width * scaleX);
-    height = Math.round(height * scaleY);
-    
+startOcrBtn.addEventListener('click', async () => {
+    if (!vfilename) {
+        alert('Please select a video file.');
+        return;
+    }
+
+    if (!video.videoWidth || !video.videoHeight || !video.clientWidth || !video.clientHeight) {
+        alert('Video metadata is not ready yet. Please try again.');
+        return;
+    }
+
     // 새롭게 추가된 시간대 값 읽기 (초 단위)
     const startTimeInput = document.getElementById('startTimeInput');
     const endTimeInput = document.getElementById('endTimeInput');
-    let startTime = parseTimeString(startTimeInput.value);
-    let endTime = parseTimeString(endTimeInput.value);
-    
-    if (!vfilename) {
-        alert('비디오 파일을 선택해주세요.');
-        return;
+    const startTime = parseTimeString(startTimeInput.value);
+    const endTime = parseTimeString(endTimeInput.value);
+
+    const scaleX = video.videoWidth / video.clientWidth;
+    const scaleY = video.videoHeight / video.clientHeight;
+
+    const fullScreenOcr = isFullScreenOcrEnabled();
+
+    let x;
+    let y;
+    let width;
+    let height;
+
+    if (fullScreenOcr) {
+        x = 0;
+        y = 0;
+        width = video.videoWidth;
+        height = video.videoHeight;
+    } else {
+        const rect = getBoundingBoxInSourcePixels(scaleX, scaleY);
+        x = rect.x;
+        y = rect.y;
+        width = rect.width;
+        height = rect.height;
     }
-    let formData = new FormData();
+
+    const formData = new FormData();
     formData.append('video_filename', vfilename);
-    formData.append('x', x);
-    formData.append('y', y);
-    formData.append('width', width);
-    formData.append('height', height);
-    if (startTime != 0) {
-        formData.append('start_time', startTime);
+    formData.append('x', String(x));
+    formData.append('y', String(y));
+    formData.append('width', String(width));
+    formData.append('height', String(height));
+    formData.append('full_screen_ocr', fullScreenOcr ? 'true' : 'false');
+
+    if (startTime !== 0) {
+        formData.append('start_time', String(startTime));
     }
-    if (endTime != 0) {
-        formData.append('end_time', endTime);
+    if (endTime !== 0) {
+        formData.append('end_time', String(endTime));
     }
-    
-    try {
-        let response = await fetch('/start_ocr/', {
-            method: 'POST',
-            body: formData
-        });
-        
-        // 응답이 정상(200~299) 범위가 아닌 경우
-        if (!response.ok) {
-            let errorData = await response.json();
-            // 응답 메시지가 {"detail": "오류 메시지"} 형식이므로 detail 필드 사용
-            alert('OCR 작업 시작 중 오류 발생: ' + errorData.detail);
+
+    if (fullScreenOcr && maskToggle.checked) {
+        const maskRect = getMaskBoxInSourcePixels(scaleX, scaleY);
+        if (!maskRect || maskRect.width <= 0 || maskRect.height <= 0) {
+            alert('Mask is enabled, but no mask area was selected. Drag on video to set the area.');
             return;
         }
-        
+
+        formData.append('mask_x', String(maskRect.x));
+        formData.append('mask_y', String(maskRect.y));
+        formData.append('mask_width', String(maskRect.width));
+        formData.append('mask_height', String(maskRect.height));
+    }
+
+    try {
+        const response = await fetch('/start_ocr/', {
+            method: 'POST',
+            body: formData,
+        });
+
+        if (!response.ok) {
+            const errorData = await response.json();
+            // 응답 메시지가 {"detail": "오류 메시지"} 형식이므로 detail 필드 사용
+            alert(`OCR 작업 시작 중 오류 발생: ${errorData.detail}`);
+            return;
+        }
+
         // 정상 응답일 경우
         let data = await response.json();
         console.log(data.task_id)
         switchToTaskListView();
     } catch (err) {
         // 네트워크 오류 등 예외 발생 시
-        alert('OCR 작업 시작 중 오류 발생: ' + err.message);
+        alert(`OCR 작업 시작 중 오류 발생: ${err.message}`);
     }
 });
+
+updateBoundingBoxInteraction();
+updateMaskControls();

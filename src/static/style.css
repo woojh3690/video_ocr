@@ -258,3 +258,26 @@ body.settings-page {
 .disabled-field .kafka-hint {
     opacity: 0.65;
 }
+
+/* OCR mask feature */
+#video-container.mask-draw-enabled {
+    cursor: crosshair;
+}
+
+#bounding-box.locked {
+    border-style: solid;
+}
+
+#mask-box {
+    position: absolute;
+    display: none;
+    border: 2px solid #111111;
+    background-color: rgba(0, 0, 0, 0.45);
+    box-sizing: border-box;
+    pointer-events: none;
+    z-index: 9;
+}
+
+#mask-controls.mask-disabled {
+    opacity: 0.6;
+}
