@@ -40,6 +40,7 @@ let maskStartY = 0;
 
 const MIN_BOX_SIZE = 20;
 const MIN_MASK_SIZE = 10;
+const VIDEO_EXTENSIONS = ['.mp4', '.avi', '.mov', '.mkv', '.webm', '.mpg', '.mpeg', '.wmv'];
 
 // WebSocket 연결 (단일 연결)
 const ws = new WebSocket(`ws://${location.host}/ws/tasks`);
@@ -78,6 +79,11 @@ function clamp(value, min, max) {
 
 function encodePath(path) {
     return path.split('/').map(encodeURIComponent).join('/');
+}
+
+function isVideoFile(path) {
+    const lower = path.toLowerCase();
+    return VIDEO_EXTENSIONS.some((ext) => lower.endsWith(ext));
 }
 
 function getVideoDisplayWidth() {
@@ -208,7 +214,11 @@ function loadDirectory(path = '') {
 
                 const icon = document.createElement('span');
                 icon.className = 'item-icon';
-                icon.textContent = entry.is_dir ? '\uD83D\uDCC1' : '\uD83D\uDCC4';
+                if (entry.is_dir) {
+                    icon.textContent = '\uD83D\uDCC1';
+                } else {
+                    icon.textContent = isVideoFile(entry.name) ? '\uD83C\uDFAC' : '\uD83D\uDCC4';
+                }
 
                 const label = document.createElement('span');
                 label.className = 'item-label';
@@ -236,9 +246,7 @@ function loadDirectory(path = '') {
 }
 
 function selectVideo(path) {
-    const videoExtensions = ['.mp4', '.avi', '.mov', '.mkv', '.webm', '.mpg', '.mpeg', '.wmv'];
-    const lower = path.toLowerCase();
-    const isVideo = videoExtensions.some((ext) => lower.endsWith(ext));
+    const isVideo = isVideoFile(path);
     if (!isVideo) {
         alert('비디오 파일을 선택해주세요.');
         return;
