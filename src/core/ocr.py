@@ -245,12 +245,11 @@ async def process_ocr(
             )
 
             #  작업 수가 N개를 초과하였을 경우 완료된 작업만 기록
-            if len(running) >= 4:
+            if len(running) >= 8:
                 done, running = await asyncio.wait(running, return_when=asyncio.FIRST_COMPLETED)
                 for t in done:
                     try:
-                        frame_number, txt = t.result()
-                        heappush(heap, (frame_number, txt))
+                        heappush(heap, t.result())
                     except OcrProcessingError as exc:
                         raise exc
             
@@ -276,8 +275,7 @@ async def process_ocr(
             for result in results:
                 if isinstance(result, Exception):
                     raise result
-                frame_number, txt = result
-                heappush(heap, (frame_number, txt))
+                heappush(heap, result)
 
         # heap 잔여 결과 정리
         while heap:
