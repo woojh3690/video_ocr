@@ -289,7 +289,7 @@ function setActionButtons(row, status, taskId) {
     if (status === 'running' || status === 'waiting') {
         const cancelBtn = document.createElement('button');
         cancelBtn.className = 'btn btn-warning btn-sm cancel-btn';
-        cancelBtn.innerText = 'Cancel';
+        cancelBtn.innerText = '중지';
         cancelBtn.onclick = () => cancelTask(taskId);
         cell.appendChild(cancelBtn);
         return;
@@ -298,12 +298,12 @@ function setActionButtons(row, status, taskId) {
     if (status === 'cancelled' || status === 'cancelling' || status === 'error') {
         const resumeBtn = document.createElement('button');
         resumeBtn.className = 'btn btn-primary btn-sm resume-btn mr-1';
-        resumeBtn.innerText = 'Resume';
+        resumeBtn.innerText = '재개';
         resumeBtn.onclick = () => resumeTask(taskId);
 
         const deleteBtn = document.createElement('button');
         deleteBtn.className = 'btn btn-danger btn-sm delete-btn';
-        deleteBtn.innerText = 'Delete';
+        deleteBtn.innerText = '삭제';
         deleteBtn.onclick = () => deleteTask(taskId);
 
         cell.appendChild(resumeBtn);
@@ -313,7 +313,7 @@ function setActionButtons(row, status, taskId) {
 
     const deleteBtn = document.createElement('button');
     deleteBtn.className = 'btn btn-danger btn-sm delete-btn';
-    deleteBtn.innerText = 'Delete';
+    deleteBtn.innerText = '삭제';
     deleteBtn.onclick = () => deleteTask(taskId);
     cell.appendChild(deleteBtn);
 }
