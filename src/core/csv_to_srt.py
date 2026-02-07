@@ -1,8 +1,8 @@
 ﻿from __future__ import annotations
 
+import sys
 import argparse
 import csv
-import math
 import re
 import unicodedata
 from dataclasses import dataclass
@@ -475,7 +475,7 @@ def convert_csv_to_srt(
     return out_srt
 
 
-def main(argv: Optional[List[str]] = None) -> int:
+def main():
     parser = argparse.ArgumentParser(
         description=(
             "Convert OCR CSV (frame_number,time,text) to SRT by merging contiguous "
@@ -484,79 +484,16 @@ def main(argv: Optional[List[str]] = None) -> int:
     )
     parser.add_argument("csv", type=Path, help="Input CSV path")
     parser.add_argument("-o", "--output", type=Path, help="Output SRT path")
-    parser.add_argument(
-        "--max-gap",
-        type=float,
-        default=0.20,
-        help="Max silence (s) to keep identical text in the same cue (default: 0.20)",
-    )
-    parser.add_argument(
-        "--min-duration",
-        type=float,
-        default=0.30,
-        help="Minimum cue duration in seconds (default: 0.30)",
-    )
-    parser.add_argument(
-        "--overlap-guard",
-        type=float,
-        default=0.01,
-        help="Safety margin subtracted from the next cue start to avoid overlaps",
-    )
-    parser.add_argument(
-        "--char-thresh",
-        type=float,
-        default=0.88,
-        help="Char-level similarity threshold for in-flight grouping (default: 0.88)",
-    )
-    parser.add_argument(
-        "--token-thresh",
-        type=float,
-        default=0.60,
-        help="Token Jaccard threshold for in-flight grouping (default: 0.60)",
-    )
-    parser.add_argument(
-        "--similar-gap",
-        type=float,
-        default=None,
-        help="Max gap to bridge for similar (non-identical) text (default: --max-gap)",
-    )
-    parser.add_argument(
-        "--same-text-gap",
-        type=float,
-        default=0.6,
-        help="Post-pass gap (s) to merge adjacent cues with the same text (default: 0.6)",
-    )
-    parser.add_argument(
-        "--same-text-char-thresh",
-        type=float,
-        default=0.94,
-        help="Char similarity needed to merge adjacent cues in the post-pass",
-    )
-    parser.add_argument(
-        "--same-text-token-thresh",
-        type=float,
-        default=0.75,
-        help="Token similarity needed to merge adjacent cues in the post-pass",
-    )
 
+    argv = sys.argv[1:]
     args = parser.parse_args(argv)
 
     out = convert_csv_to_srt(
         args.csv,
-        args.output,
-        max_gap=args.max_gap,
-        min_duration=args.min_duration,
-        overlap_guard=args.overlap_guard,
-        char_thresh=args.char_thresh,
-        token_thresh=args.token_thresh,
-        similar_gap=args.similar_gap,
-        same_text_gap=args.same_text_gap,
-        same_text_char_thresh=args.same_text_char_thresh,
-        same_text_token_thresh=args.same_text_token_thresh,
+        args.output
     )
     print(out)
-    return 0
 
 
 if __name__ == "__main__":
-    raise SystemExit(main())
+    main()
