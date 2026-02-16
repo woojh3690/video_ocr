@@ -14,7 +14,7 @@ from langdetect.lang_detect_exception import LangDetectException
 import random
 
 from core.paddle_client import OcrProcessingError, SpottingItem, PaddleClient
-from core.csv_to_srt import convert_csv_to_srt
+from core.csv_to_srt import jsonl_to_srt
 from core.settings_manager import get_settings
 
 UPLOAD_DIR = "uploads"
@@ -247,7 +247,7 @@ async def process_ocr(
     # csv_path_obj = Path(jsonl_path)
     # srt_path = csv_path_obj.with_suffix(f".{most_common_lang}.srt")
 
-    # convert_csv_to_srt(csv_path_obj, srt_path)
+    # jsonl_to_srt(csv_path_obj)
 
     # 진행 상황 100%로 업데이트
     yield 100
