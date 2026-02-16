@@ -95,6 +95,7 @@ class PaddleClient:
                 model=self.model,
                 messages=messages,
                 temperature=0.0,
+                max_tokens=256,
             )
             content = response.choices[0].message.content
             if content != "":
@@ -102,6 +103,7 @@ class PaddleClient:
                     item = self.parse_spotting_line(line)
                     if isinstance(item, SpottingItem):
                         spotting_list.append(item)
+            spotting_list = self.dedup_spotting_items(spotting_list)
         except (ValidationError, LengthFinishReasonError) as e:
             # 예외가 발생해도 그냥 빈 문자열로 치환하고 로그만 남긴다
             print(f"[Warn] 프레임 {frame_idx} OCR 중 예외 발생: {e!r}")
@@ -134,3 +136,19 @@ class PaddleClient:
             (locs[6], locs[7]),
         )
         return SpottingItem(text=text, quad=quad)
+    
+    def dedup_spotting_items(self, items: List[SpottingItem]) -> List[SpottingItem]:
+        """
+        완전 동일(text, quad) 중복 제거. (순서 유지)
+        """
+        seen: set[Tuple[str, Tuple[Tuple[int, int], ...]]] = set()
+        out: List[SpottingItem] = []
+
+        for it in items:
+            key = (it.text, it.quad)  # quad까지 포함하니 '완전 동일'만 제거됨
+            if key in seen:
+                continue
+            seen.add(key)
+            out.append(it)
+
+        return out
