@@ -1,25 +1,23 @@
-﻿from __future__ import annotations
-
 import sys
+import json
 import argparse
-import csv
-import re
-import unicodedata
-from dataclasses import dataclass
 from pathlib import Path
-from statistics import median
+from dataclasses import dataclass
+from difflib import SequenceMatcher
+from collections import Counter, defaultdict
 from typing import Iterable, List, Optional
 
+import numpy as np
+import unicodedata
+from norfair import Detection, Tracker
 
-_WS_RE = re.compile(r"\s+")
-
+from core.paddle_client import SpottingItem
 
 @dataclass
-class Row:
-    frame_number: int
-    time: float
-    text: str
-
+class FrameInfo:
+    frame_idx: int
+    timestamp_sec: float
+    spotting_items: List[SpottingItem]
 
 @dataclass
 class Segment:
@@ -28,451 +26,346 @@ class Segment:
     end: float
     text: str
 
+def fine_video(jsonl_path_obj: Path) -> Path:
+    for file in jsonl_path_obj.parent.iterdir():
+        if file.name == jsonl_path_obj.name and file.suffix not in [".jsonl", ".srt"]:
+            return file
+    raise FileNotFoundError("Video file not found")
 
-# 공백·개행·탭 등을 하나의 공백으로 줄여 주는 헬퍼
-def normalize_text(text: str) -> str:
-    """Strip and collapse whitespace."""
-    if not text:
-        return ""
-    text = text.strip()
-    return _WS_RE.sub(" ", text)
-
-
-def _strip_punct_lower_nfkc(text: str) -> str:
-    if not text:
-        return ""
-    normalized = unicodedata.normalize("NFKC", text).casefold()
-    kept: list[str] = []
-    for ch in normalized:
-        if ch.isspace():
-            kept.append(" ")
-            continue
-        cat = unicodedata.category(ch)
-        if cat.startswith("L") or cat.startswith("N"):
-            kept.append(ch)
-    collapsed = _WS_RE.sub(" ", "".join(kept)).strip()
-    return collapsed
-
-
-def _letter_signature(normalized: str) -> str:
-    if not normalized:
-        return ""
-    signature: list[str] = []
-    prev = ""
-    for ch in normalized:
-        if ch.isspace():
-            prev = ""
-            continue
-        if ch != prev:
-            signature.append(ch)
-        prev = ch
-    return "".join(signature)
-
-
-def token_set(text: str) -> set[str]:
-    normalized = _strip_punct_lower_nfkc(text)
-    return set(normalized.split()) if normalized else set()
-
-
-def char_similarity(a: str, b: str) -> float:
-    from difflib import SequenceMatcher
-
-    norm_a = _strip_punct_lower_nfkc(a)
-    norm_b = _strip_punct_lower_nfkc(b)
-    if not norm_a and not norm_b:
-        return 1.0
-    return SequenceMatcher(None, norm_a, norm_b, autojunk=False).ratio()
-
-
-def token_jaccard(a: str, b: str) -> float:
-    aset = token_set(a)
-    bset = token_set(b)
-    if not aset and not bset:
-        return 1.0
-    if not aset or not bset:
-        return 0.0
-    inter = len(aset & bset)
-    union = len(aset | bset)
-    return inter / union if union else 0.0
-
-
-def are_similar(
-    a: str,
-    b: str,
-    *,
-    char_thresh: float = 0.88,
-    token_thresh: float = 0.60,
-) -> bool:
-    if not a or not b:
-        return False
-    if a == b:
-        return True
-
-    norm_a = _strip_punct_lower_nfkc(a)
-    norm_b = _strip_punct_lower_nfkc(b)
-
-    if not norm_a or not norm_b:
-        return False
-
-    letters_a = norm_a.replace(" ", "")
-    letters_b = norm_b.replace(" ", "")
-    avg_len = (len(letters_a) + len(letters_b)) / 2 if (letters_a or letters_b) else 0.0
-
-    def adjusted_threshold(base: float, avg: float) -> float:
-        if avg <= 3:
-            return min(base, 0.72)
-        if avg <= 6:
-            return min(base, 0.78)
-        if avg <= 10:
-            return min(base, 0.84)
-        if avg <= 18:
-            return min(base, base - 0.03)
-        return base
-
-    char_target = adjusted_threshold(char_thresh, avg_len)
-    cs = char_similarity(a, b)
-    if cs >= char_target:
-        return True
-
-    tj = token_jaccard(a, b)
-    if tj and cs >= max(char_target - 0.08, 0.7) and tj >= token_thresh:
-        return True
-
-    sig_a = _letter_signature(norm_a)
-    sig_b = _letter_signature(norm_b)
-    if sig_a and sig_b:
-        shorter, longer = sorted((sig_a, sig_b), key=len)
-        len_longer = len(longer)
-        if len_longer <= 10:
-            if shorter == longer:
-                return True
-            if shorter in longer and len_longer - len(shorter) <= 3:
-                return True
-
-        from difflib import SequenceMatcher
-
-        sig_ratio = SequenceMatcher(None, sig_a, sig_b, autojunk=False).ratio()
-        if sig_ratio >= max(char_target - 0.1, 0.78):
-            return True
-
-        letters_overlap = set(sig_a) & set(sig_b)
-        union = set(sig_a) | set(sig_b)
-        if union:
-            overlap_ratio = len(letters_overlap) / len(union)
-            if overlap_ratio >= 0.75 and abs(len(sig_a) - len(sig_b)) <= 3 and len_longer <= 12:
-                return True
-
-    return False
-
-
-def parse_csv(path: Path) -> List[Row]:
-    rows: List[Row] = []
-    with path.open("r", encoding="utf-8-sig", newline="") as handle:
-        reader = csv.DictReader(handle)
-        for idx, record in enumerate(reader):
-            try:
-                frame = int(
-                    record.get("frame_number")
-                    or record.get("frame")
-                    or record.get("index")
-                    or idx
+def jsonl_to_srt(jsonl_path: str, visualize=True) -> None:
+        # 경로 확인
+        jsonl_path_obj = Path(jsonl_path)
+        if not jsonl_path_obj.exists():
+            raise FileNotFoundError(f"JSONL file not found: {jsonl_path_obj}")
+        if visualize:
+            vd_file = fine_video(jsonl_path_obj)
+        
+        # jsonl 파일 읽기
+        ocr_results: list[FrameInfo] = []
+        with jsonl_path_obj.open("r", encoding="utf-8") as handle:
+            while handle:
+                line = handle.readline()
+                if not line:
+                    break
+                ocr_res_json = json.loads(line)
+                frame_idx = int(ocr_res_json["frame_number"])
+                timestamp_sec = float(ocr_res_json["time"])
+                spotting_items = []
+                for item in ocr_res_json["spotting_items"]:
+                    spotting_items.append(SpottingItem.from_dict(item))
+                ocr_results.append(
+                    FrameInfo(
+                        frame_idx=frame_idx,
+                        timestamp_sec=timestamp_sec,
+                        spotting_items=spotting_items
+                    )
                 )
-            except Exception:
-                frame = idx
-            try:
-                timestamp = float(
-                    record.get("time")
-                    or record.get("seconds")
-                    or record.get("t")
-                    or 0.0
-                )
-            except Exception:
+
+        # 트래킹 전, 글자 수(문자 카테고리 L 기준)가 1개 이하인 OCR 결과 제거
+        for frame_info in ocr_results:
+            rec_texts = frame_info.rec_texts
+            if not rec_texts:
                 continue
-            text = record.get("text") or ""
-            rows.append(Row(frame_number=frame, time=timestamp, text=text))
-    rows.sort(key=lambda r: r.time)
-    return rows
 
+            keep_indices = []
+            for idx, text in enumerate(rec_texts):
+                letter_count = sum(1 for ch in text if unicodedata.category(ch).startswith("L"))
+                if letter_count > 1:
+                    keep_indices.append(idx)
 
-def estimate_frame_step(times: List[float]) -> float:
-    deltas = [b - a for a, b in zip(times, times[1:]) if b > a]
-    if not deltas:
-        return 0.04
-    dt = median(deltas)
-    return max(0.01, min(dt, 0.2))
+            # 인덱스가 연동되는 OCR 필드들을 동일하게 필터링
+            if len(keep_indices) != len(rec_texts):
+                frame_info.rec_texts = [frame_info.rec_texts[idx] for idx in keep_indices]
+                frame_info.rec_polys = [frame_info.rec_polys[idx] for idx in keep_indices]
+                frame_info.rec_boxes = [frame_info.rec_boxes[idx] for idx in keep_indices]
 
+        # 트래커 초기화
+        text_weight_base = 0.24
+        max_text_weight_at_conf = 0.90
+        strong_mismatch_similarity = 0.35
+        mismatch_penalty = 0.08
 
-def to_srt_timestamp(seconds: float) -> str:
-    if seconds < 0:
-        seconds = 0.0
-    total_ms = int(round(seconds * 1000.0))
-    ms = total_ms % 1000
-    total_seconds = total_ms // 1000
-    s = total_seconds % 60
-    total_minutes = total_seconds // 60
-    m = total_minutes % 60
-    h = total_minutes // 60
-    return f"{h:02d}:{m:02d}:{s:02d},{ms:03d}"
+        def normalize_text(text: str) -> str:
+            if not text:
+                return ""
+            text = unicodedata.normalize("NFKC", text).casefold()
+            return "".join(ch for ch in text if ch.isalnum())
 
+        def box_from_points(points: np.ndarray) -> tuple[float, float, float, float]:
+            x1 = float(min(points[0][0], points[1][0]))
+            y1 = float(min(points[0][1], points[1][1]))
+            x2 = float(max(points[0][0], points[1][0]))
+            y2 = float(max(points[0][1], points[1][1]))
+            return x1, y1, x2, y2
 
+        def iou_from_points(candidate_points: np.ndarray, tracked_points: np.ndarray) -> float:
+            cx1, cy1, cx2, cy2 = box_from_points(candidate_points)
+            tx1, ty1, tx2, ty2 = box_from_points(tracked_points)
 
+            inter_w = max(0.0, min(cx2, tx2) - max(cx1, tx1))
+            inter_h = max(0.0, min(cy2, ty2) - max(cy1, ty1))
+            inter = inter_w * inter_h
+            if inter <= 0.0:
+                return 0.0
 
+            area_c = max(0.0, cx2 - cx1) * max(0.0, cy2 - cy1)
+            area_t = max(0.0, tx2 - tx1) * max(0.0, ty2 - ty1)
+            union = area_c + area_t - inter
+            if union <= 0.0:
+                return 0.0
+            return inter / union
 
-def merge_same_text_segments(
-    segments: List[Segment],
-    *,
-    gap: float,
-    char_thresh: float = 0.94,
-    token_thresh: float = 0.75,
-) -> List[Segment]:
-    if not segments:
-        return []
+        def hybrid_distance(det: Detection, tracked_object) -> float:
+            iou_score = iou_from_points(det.points, tracked_object.estimate)
+            iou_distance = 1.0 - iou_score
 
-    merged: List[Segment] = [segments[0]]
-    for seg in segments[1:]:
-        prev = merged[-1]
-        gap_len = max(0.0, seg.start - prev.end)
+            det_data = det.data or {}
+            trk_data = tracked_object.last_detection.data if tracked_object.last_detection else {}
+            trk_data = trk_data or {}
 
-        norm_prev = _strip_punct_lower_nfkc(prev.text).replace(" ", "")
-        norm_curr = _strip_punct_lower_nfkc(seg.text).replace(" ", "")
-        short_subset = (
-            bool(norm_prev)
-            and bool(norm_curr)
-            and len(norm_prev) >= 5
-            and len(norm_curr) <= 3
-            and set(norm_curr) <= set(norm_prev)
+            det_text = det_data.get("norm_text", "")
+            trk_text = trk_data.get("norm_text", "")
+            conf_factor = 1.0
+            if det_text and trk_text:
+                similarity = SequenceMatcher(None, det_text, trk_text).ratio()
+                text_distance = 1.0 - similarity
+
+                scaled = min(1.0, conf_factor / max_text_weight_at_conf)
+                text_weight = min(text_weight_base, text_weight_base * max(0.0, scaled))
+                distance = (1.0 - text_weight) * iou_distance + text_weight * text_distance
+
+                if similarity <= strong_mismatch_similarity:
+                    distance = min(1.0, distance + mismatch_penalty)
+                return distance
+
+            return iou_distance
+
+        tracker = Tracker(
+            distance_function=hybrid_distance,
+            distance_threshold=0.7,
+            initialization_delay=0,
+            hit_counter_max=4,
         )
-        cs = char_similarity(prev.text, seg.text)
-        small_len = len(norm_prev) <= 12 and len(norm_curr) <= 12
-        unique_chars = set(norm_prev + norm_curr)
 
-        if seg.text == prev.text:
-            prev_len = prev.end - prev.start
-            seg_len = seg.end - seg.start
-            max_len = max(prev_len, seg_len)
-            if prev_len <= 2.0 and seg_len <= 2.0:
-                allowed_gap = max(gap, 1.3)
-            elif max_len >= 4.0 or len(norm_prev) >= 12:
-                allowed_gap = max(gap, 1.6)
-            else:
-                allowed_gap = max(gap, 1.0)
-        elif short_subset:
-            allowed_gap = max(gap, 1.4)
-        elif small_len and cs >= max(char_thresh - 0.06, 0.88):
-            allowed_gap = max(gap, 1.0)
-        elif len(unique_chars) <= 7 and cs >= max(char_thresh - 0.24, 0.70):
-            allowed_gap = max(gap, 1.0)
-        else:
-            allowed_gap = gap
+        # 트래커를 사용하여 텍스트 박스별 track id를 계산
+        for frame_info in ocr_results:
+            rec_boxes = frame_info.rec_boxes
+            rec_texts = frame_info.rec_texts
+            if len(rec_boxes) == 0:
+                tracker.update(detections=[])
+                frame_info.track_ids = []
+                continue
 
-        if gap_len > allowed_gap:
-            merged.append(seg)
-            continue
+            detections: list[Detection] = []
+            for det_idx, box in enumerate(rec_boxes):
+                x1, y1, x2, y2 = box
+                text = rec_texts[det_idx] if det_idx < len(rec_texts) else ""
+                detections.append(Detection(
+                    points=np.array([[x1, y1], [x2, y2]]), 
+                    data={
+                        "det_index": det_idx,
+                        "raw_text": text,
+                        "norm_text": normalize_text(text),
+                    }
+                ))
 
-        if seg.text == prev.text or short_subset:
-            should_merge = True
-        elif small_len and cs >= max(char_thresh - 0.06, 0.88):
-            should_merge = True
-        elif len(unique_chars) <= 7 and cs >= max(char_thresh - 0.24, 0.70):
-            should_merge = True
-        else:
-            if cs >= char_thresh:
-                should_merge = True
-            elif cs >= max(char_thresh - 0.02, 0.85) and token_jaccard(prev.text, seg.text) >= token_thresh:
-                should_merge = True
-            else:
-                should_merge = False
+            # 트래킹
+            frame_info.track_ids = [None] * len(rec_boxes)
+            tracked_objects = tracker.update(detections=detections)
 
-        if should_merge:
-            if len(seg.text) > len(prev.text):
-                prev.text = seg.text
-            prev.end = max(prev.end, seg.end)
-        else:
-            merged.append(seg)
+            # 이번 프레임 detection 객체 identity만 허용
+            curr_det_ids = {id(d) for d in detections}
 
-    def _squash_moan_runs(items: List[Segment]) -> List[Segment]:
-        if not items:
-            return []
-        squashed: List[Segment] = [items[0]]
-        for seg in items[1:]:
-            prev = squashed[-1]
-            norm_prev_local = _strip_punct_lower_nfkc(prev.text).replace(" ", "")
-            norm_curr_local = _strip_punct_lower_nfkc(seg.text).replace(" ", "")
-            if norm_prev_local and norm_curr_local:
-                unique_local = set(norm_prev_local + norm_curr_local)
-                gap_local = max(0.0, seg.start - prev.end)
-                if len(unique_local) <= 7 and gap_local <= max(gap, 1.8):
-                    if len(norm_curr_local) > len(norm_prev_local):
-                        prev.text = seg.text
-                    prev.end = max(prev.end, seg.end)
-                    continue
-            squashed.append(seg)
-        return squashed
+            for t in tracked_objects:
+                if id(t.last_detection) not in curr_det_ids:
+                    continue  # 이전 프레임 last_detection인 트랙 제외
+                det_index = t.last_detection.data["det_index"]
+                frame_info.track_ids[det_index] = t.id
 
-    return _squash_moan_runs(merged)
-
-
-def build_segments(
-    rows: List[Row],
-    *,
-    max_gap: float,
-    min_duration: float,
-    overlap_guard: float,
-    char_thresh: float = 0.88,
-    token_thresh: float = 0.60,
-    similar_gap: Optional[float] = None,
-    same_text_gap: float = 0.6,
-    same_text_char_thresh: float = 0.94,
-    same_text_token_thresh: float = 0.75,
-) -> List[Segment]:
-    if not rows:
-        return []
-
-    times = [row.time for row in rows]
-    dt = estimate_frame_step(times)
-    segments: List[Segment] = []
-
-    current_text: Optional[str] = None
-    current_start = 0.0
-    current_last_time = 0.0
-    current_counts: dict[str, int] = {}
-    current_last_seen: dict[str, float] = {}
-
-    def flush(next_time: Optional[float] = None) -> None:
-        nonlocal current_text, current_start, current_last_time, current_counts, current_last_seen
-        if current_text is None:
-            return
-        end_time = current_last_time + dt
-        if next_time is not None:
-            end_time = min(end_time, max(current_start, next_time - overlap_guard))
-        if current_counts:
-            max_count = max(current_counts.values())
-            candidates = [t for t, c in current_counts.items() if c == max_count]
-            if len(candidates) > 1:
-                rep = max(
-                    candidates,
-                    key=lambda t: (current_last_seen.get(t, -1.0), len(t))
+            if any(track_id is None for track_id in frame_info.track_ids):
+                raise RuntimeError(
+                    f"Unmatched detection found at frame {frame_info.frame_idx}: {frame_info.track_ids}"
                 )
+
+        # 종료 시점이 가깝고, 시작 시점도 가까운 트랙은 같은 자막으로 간주
+        first_frame_by_track: dict[int, int] = {}
+        first_time_by_track: dict[int, float] = {}
+        last_frame_by_track: dict[int, int] = {}
+
+        # track_id 기준으로 최초/최종 등장 시점 집계
+        for frame_info in ocr_results:
+            frame_idx = frame_info.frame_idx
+            frame_time = frame_info.timestamp_sec
+            for track_id in frame_info.track_ids:
+                if track_id not in first_frame_by_track:
+                    first_frame_by_track[track_id] = frame_idx
+                    first_time_by_track[track_id] = frame_time
+                last_frame_by_track[track_id] = frame_idx
+
+        # Union-Find 초기화: 처음에는 각 트랙이 자기 자신을 대표(root)로 가짐
+        parent: dict[int, int] = {track_id: track_id for track_id in last_frame_by_track}
+
+        def find_root(x: int) -> int:
+            # 대표를 찾을 때 경로 압축(path compression)으로 다음 탐색을 빠르게 함
+            while parent[x] != x:
+                parent[x] = parent[parent[x]]
+                x = parent[x]
+            return x
+
+        def union_track(a: int, b: int) -> None:
+            # a, b가 속한 그룹의 대표를 찾아 하나의 그룹으로 병합
+            ra = find_root(a)
+            rb = find_root(b)
+            if ra == rb:
+                return
+            # 더 먼저 등장한 트랙 쪽을 대표로 유지(동률이면 id 작은 쪽)
+            a_first = first_frame_by_track.get(ra, 10**12)
+            b_first = first_frame_by_track.get(rb, 10**12)
+            if (a_first, ra) <= (b_first, rb):
+                parent[rb] = ra
             else:
-                rep = candidates[0]
-        else:
-            rep = current_text
-        rep = normalize_text(rep)
-        if rep and end_time - current_start >= min_duration:
+                parent[ra] = rb
+
+        # 완전 동시 종료가 아니어도 근접 종료(±6프레임)는 허용.
+        end_frame_tolerance = 6
+        start_time_tolerance_sec = 2.0
+        tracks_sorted_by_last_frame = sorted(last_frame_by_track.items(), key=lambda item: item[1])
+        track_count = len(tracks_sorted_by_last_frame)
+        for i in range(track_count - 1):
+            # 기준 트랙 A를 하나 잡고, 끝난 시점이 가까운 뒤쪽 트랙들과만 비교
+            track_id_a, last_frame_a = tracks_sorted_by_last_frame[i]
+
+            j = i + 1
+            while j < track_count:
+                track_id_b, last_frame_b = tracks_sorted_by_last_frame[j]
+                # 종료 프레임 차이가 허용치보다 커지면 이후 트랙도 전부 제외 가능
+                if last_frame_b - last_frame_a > end_frame_tolerance:
+                    break
+
+                first_time_a = first_time_by_track.get(track_id_a)
+                first_time_b = first_time_by_track.get(track_id_b)
+                if first_time_a is not None and first_time_b is not None:
+                    earlier_time, later_time = sorted((first_time_a, first_time_b))
+                    if later_time - earlier_time <= start_time_tolerance_sec:
+                        # 먼저 등장한 트랙과 비교 대상 트랙의 첫 등장 시간이 2초 이내면 병합
+                        union_track(track_id_a, track_id_b)
+
+                j += 1
+
+        # 각 프레임의 track_id를 최종 대표 id로 치환해 병합 결과를 반영
+        for frame_info in ocr_results:
+            merged_track_ids = []
+            for tid in frame_info.track_ids:
+                if tid in parent:
+                    merged_track_ids.append(find_root(tid))
+                else:
+                    merged_track_ids.append(tid)
+            frame_info.track_ids = merged_track_ids
+        
+        segments: list[Segment] = []
+        track_frame_counts: dict[int, int] = defaultdict(int)
+        track_text_counts: dict[int, Counter[str]] = defaultdict(Counter)
+        track_start: dict[int, float] = {}
+        track_end: dict[int, float] = {}
+
+        # 트레킹 정보를 기반으로 카운팅
+        for frame_info in ocr_results:
+            track_ids = frame_info.track_ids
+            rec_texts = frame_info.rec_texts
+            rec_boxes = frame_info.rec_boxes
+            frame_time = frame_info.timestamp_sec
+
+            # 현재 프레임의 OCR 결과를 track_id별로 모음
+            frame_track_items: dict[int, list[tuple[float, float, float, float, str]]] = defaultdict(list)
+            for track_id, box, text in zip(track_ids, rec_boxes, rec_texts):
+                x1, y1, x2, y2 = box
+                frame_track_items[track_id].append((float(x1), float(y1), float(x2), float(y2), text))
+
+            # track_id별 박스 배치(가로/세로)에 맞춰 정렬 후 프레임 텍스트를 병합
+            merged_text_by_track: dict[int, str] = {}
+            for track_id, items in frame_track_items.items():
+                total_width = sum(abs(x2 - x1) for x1, _, x2, _, _ in items)
+                total_height = sum(abs(y2 - y1) for _, y1, _, y2, _ in items)
+                is_horizontal_layout = total_width >= total_height
+
+                if is_horizontal_layout:
+                    # 가로형: 위 -> 아래, 같은 줄에서는 좌 -> 우
+                    items.sort(key=lambda it: ((it[1] + it[3]) / 2.0, (it[0] + it[2]) / 2.0))
+                else:
+                    # 세로형: 우 -> 좌, 같은 열에서는 위 -> 아래
+                    items.sort(key=lambda it: (-(it[0] + it[2]) / 2.0, (it[1] + it[3]) / 2.0))
+
+                merged_text_by_track[track_id] = "\n".join(text for *_, text in items if text)
+
+            # 병합된 프레임 텍스트를 트랙별 카운트/시간 범위에 누적
+            for track_id, merged_text in merged_text_by_track.items():
+                track_frame_counts[track_id] += 1
+                track_text_counts[track_id][merged_text] += 1
+
+                if track_id not in track_start or frame_time < track_start[track_id]:
+                    track_start[track_id] = frame_time
+                if track_id not in track_end or frame_time > track_end[track_id]:
+                    track_end[track_id] = frame_time
+
+        # 카운팅 정보를 기반으로 병합 진행
+        for track_id, frame_count in track_frame_counts.items():
+            if frame_count < 8:
+                continue
+            text_counter = track_text_counts.get(track_id)
+            if not text_counter:
+                continue
+
+            seg_text = text_counter.most_common(1)[0][0]
             segments.append(
                 Segment(
-                    index=len(segments) + 1,
-                    start=current_start,
-                    end=end_time,
-                    text=rep,
+                    index=0,
+                    start=float(track_start[track_id]),
+                    end=float(track_end[track_id]),
+                    text=seg_text,
                 )
             )
-        current_text = None
-        current_counts = {}
-        current_last_seen = {}
 
-    for row in rows:
-        tnorm = normalize_text(row.text)
-        if not tnorm:
-            continue
-        if current_text is None:
-            current_text = tnorm
-            current_start = row.time
-            current_last_time = row.time
-            current_counts[tnorm] = current_counts.get(tnorm, 0) + 1
-            current_last_seen[tnorm] = row.time
-            continue
+        # 자막 세그먼트 정렬
+        segments.sort(key=lambda seg: (seg.start, seg.end, seg.text))
 
-        gap = row.time - current_last_time
-        allow_same = max_gap
-        allow_similar = similar_gap if similar_gap is not None else max_gap
+        # 자막이 뒤에 자막과 겹치지 않도록 seg.end 시간을 짧게 조정
+        min_subtitle_gap = 0.08 # 자막간 최소 간격 (약 2프레임)
+        for idx in range(len(segments) - 1):
+            current = segments[idx]
+            next_seg = segments[idx + 1]
+            latest_allowed_end = next_seg.start - min_subtitle_gap
+            if current.end > latest_allowed_end:
+                current.end = latest_allowed_end
 
-        if tnorm == current_text or are_similar(
-            current_text,
-            tnorm,
-            char_thresh=char_thresh,
-            token_thresh=token_thresh,
-        ):
-            if (tnorm == current_text and gap <= allow_same) or (
-                tnorm != current_text and gap <= allow_similar
-            ):
-                current_last_time = row.time
-                current_counts[tnorm] = current_counts.get(tnorm, 0) + 1
-                current_last_seen[tnorm] = row.time
-            else:
-                flush(next_time=row.time)
-                current_text = tnorm
-                current_start = row.time
-                current_last_time = row.time
-                current_counts = {tnorm: 1}
-                current_last_seen = {tnorm: row.time}
-        else:
-            flush(next_time=row.time)
-            current_text = tnorm
-            current_start = row.time
-            current_last_time = row.time
-            current_counts = {tnorm: 1}
-            current_last_seen = {tnorm: row.time}
-
-    flush(next_time=None)
-
-    segments = merge_same_text_segments(
-        segments,
-        gap=same_text_gap,
-        char_thresh=same_text_char_thresh,
-        token_thresh=same_text_token_thresh,
-    )
-
-    for idx, seg in enumerate(segments, start=1):
-        seg.index = idx
-    return segments
-
-
-def write_srt(segments: Iterable[Segment], out_path: Path) -> None:
-    with out_path.open("w", encoding="utf-8", newline="\n") as handle:
-        first = True
-        for seg in segments:
-            if not first:
-                handle.write("\n")
-            first = False
-            handle.write(f"{seg.index}\n")
-            handle.write(
-                f"{to_srt_timestamp(seg.start)} --> {to_srt_timestamp(seg.end)}\n"
-            )
-            handle.write(f"{seg.text}\n")
-
-
-def convert_csv_to_srt(
-    in_csv: Path,
-    out_srt: Optional[Path] = None,
-    *,
-    max_gap: float = 0.20,
-    min_duration: float = 0.30,
-    overlap_guard: float = 0.01,
-    char_thresh: float = 0.88,
-    token_thresh: float = 0.60,
-    similar_gap: Optional[float] = None,
-    same_text_gap: float = 0.6,
-    same_text_char_thresh: float = 0.94,
-    same_text_token_thresh: float = 0.75,
-) -> Path:
-    rows = parse_csv(in_csv)
-    segments = build_segments(
-        rows,
-        max_gap=max_gap,
-        min_duration=min_duration,
-        overlap_guard=overlap_guard,
-        char_thresh=char_thresh,
-        token_thresh=token_thresh,
-        similar_gap=similar_gap,
-        same_text_gap=same_text_gap,
-        same_text_char_thresh=same_text_char_thresh,
-        same_text_token_thresh=same_text_token_thresh,
-    )
-    if out_srt is None:
-        out_srt = in_csv.with_suffix(".srt")
-    write_srt(segments, out_srt)
-    return out_srt
+        # 보정 과정에서 end < start 로 역전된 자막은 제거
+        segments = [seg for seg in segments if seg.end >= seg.start]
+        for i, seg in enumerate(segments, start=1):
+            seg.index = i
+        
+        # 자막 생성
+        def to_srt_timestamp(seconds: float) -> str:
+            if seconds < 0:
+                seconds = 0.0
+            total_ms = int(round(seconds * 1000.0))
+            ms = total_ms % 1000
+            total_seconds = total_ms // 1000
+            s = total_seconds % 60
+            total_minutes = total_seconds // 60
+            m = total_minutes % 60
+            h = total_minutes // 60
+            return f"{h:02d}:{m:02d}:{s:02d},{ms:03d}"
+        
+        # srt 파일 초기화
+        srt_path = jsonl_path_obj.with_suffix(".srt")
+        with srt_path.open("w", encoding="utf-8", newline="\n") as handle:
+            first = True
+            for seg in segments:
+                if not first:
+                    handle.write("\n")
+                first = False
+                handle.write(f"{seg.index}\n")
+                handle.write(f"{to_srt_timestamp(seg.start)} --> {to_srt_timestamp(seg.end)}\n")
+                handle.write(f"{seg.text}\n")
 
 
 def main():
@@ -483,15 +376,11 @@ def main():
         )
     )
     parser.add_argument("csv", type=Path, help="Input CSV path")
-    parser.add_argument("-o", "--output", type=Path, help="Output SRT path")
 
     argv = sys.argv[1:]
     args = parser.parse_args(argv)
 
-    out = convert_csv_to_srt(
-        args.csv,
-        args.output
-    )
+    out = jsonl_to_srt(args.csv)
     print(out)
 
 

@@ -272,7 +272,7 @@ async def update_settings_api(payload: SettingsUpdateRequest):
 async def is_vllm_health():
     """Check if vllm server is reachable"""
     settings = current_settings
-    client = openai.AsyncOpenAI(base_url=settings.llm_base_url or None, api_key="dummy_key")
+    client = openai.AsyncOpenAI(base_url=current_settings.llm_base_url, api_key="dummy_key")
     try:
         await client.models.list()
         return True
@@ -568,7 +568,7 @@ async def start_next_task():
     next_id = get_next_waiting_task_id()
     if not next_id:
         # 대기 중인 작업이 없으면 vLLM 컨테이너 중지로 자원 절약
-        docker_manager.stop_container(docker_name)
+        # docker_manager.stop_container(docker_name)
         return
 
     next_task = tasks[next_id]
