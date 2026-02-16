@@ -14,7 +14,7 @@ from langdetect.lang_detect_exception import LangDetectException
 import random
 
 from core.paddle_client import OcrProcessingError, SpottingItem, PaddleClient
-from core.csv_to_srt import jsonl_to_srt
+from core.jsonl_to_srt import jsonl_to_srt
 from core.settings_manager import get_settings
 
 UPLOAD_DIR = "uploads"
