@@ -11,7 +11,7 @@ import traceback
 from enum import Enum
 from json import dumps
 from pathlib import Path
-from dataclasses import dataclass, field, asdict
+from dataclasses import dataclass, asdict
 from typing import Dict, List, Optional
 
 import cv2

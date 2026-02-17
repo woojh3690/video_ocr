@@ -18,6 +18,7 @@ from langdetect import detect
 from langdetect.lang_detect_exception import LangDetectException
 
 from core.paddle_client import SpottingItem
+from core.util import clean_ocr_text
 
 @dataclass
 class FrameInfo:
@@ -279,7 +280,9 @@ def jsonl_to_srt(jsonl_path_obj: Path, visualize=False):
             timestamp_sec = float(ocr_res_json["time"])
             spotting_items = []
             for item in ocr_res_json["spotting_items"]:
-                spotting_items.append(SpottingItem.from_dict(item))
+                spotting_obj = SpottingItem.from_dict(item)
+                spotting_obj.text = clean_ocr_text(spotting_obj.text)
+                spotting_items.append(spotting_obj)
             ocr_results.append(FrameInfo(
                 frame_idx=frame_idx,
                 timestamp_sec=timestamp_sec,
@@ -302,7 +305,7 @@ def jsonl_to_srt(jsonl_path_obj: Path, visualize=False):
         if len(keep_indices) != len(frame_info.spotting_items):
             frame_info.spotting_items = [frame_info.spotting_items[idx] for idx in keep_indices]
 
-    def normalize_text(text: str) -> str:
+    def filtering_only_text(text: str) -> str:
         if not text:
             return ""
         text = unicodedata.normalize("NFKC", text).casefold()
@@ -391,7 +394,7 @@ def jsonl_to_srt(jsonl_path_obj: Path, visualize=False):
                 data={
                     "det_index": det_idx,
                     "raw_text": text,
-                    "norm_text": normalize_text(text),
+                    "norm_text": filtering_only_text(text),
                 }
             ))
 

@@ -1,9 +1,8 @@
 import re
-import asyncio
 
 from dataclasses import dataclass, asdict
-from typing import List, Tuple, Optional
-from pydantic import BaseModel, ValidationError
+from typing import List, Tuple
+from pydantic import ValidationError
 
 from openai import AsyncOpenAI, LengthFinishReasonError
 
