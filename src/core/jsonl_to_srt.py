@@ -11,10 +11,10 @@ import cv2
 import numpy as np
 import unicodedata
 from norfair import Detection, Tracker
+from norfair.tracker import TrackedObject
 from PIL import Image, ImageDraw, ImageFont
 
 from core.paddle_client import SpottingItem
-
 
 @dataclass
 class FrameInfo:
@@ -300,12 +300,6 @@ def jsonl_to_srt(jsonl_path: str, visualize=False) -> Path:
         if len(keep_indices) != len(frame_info.spotting_items):
             frame_info.spotting_items = [frame_info.spotting_items[idx] for idx in keep_indices]
 
-    # 트래커 파라미터 초기화
-    text_weight_base = 0.24
-    max_text_weight_at_conf = 0.90
-    strong_mismatch_similarity = 0.35
-    mismatch_penalty = 0.08
-
     def normalize_text(text: str) -> str:
         if not text:
             return ""
@@ -336,7 +330,13 @@ def jsonl_to_srt(jsonl_path: str, visualize=False) -> Path:
             return 0.0
         return inter / union
 
-    def hybrid_distance(det: Detection, tracked_object) -> float:
+    # 트래커 파라미터 초기화
+    text_weight_base = 0.24
+    max_text_weight_at_conf = 0.90
+    strong_mismatch_similarity = 0.35
+    mismatch_penalty = 0.08
+    
+    def hybrid_distance(det: Detection, tracked_object: TrackedObject) -> float:
         iou_score = iou_from_points(det.points, tracked_object.estimate)
         iou_distance = 1.0 - iou_score
 
