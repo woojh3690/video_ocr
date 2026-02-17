@@ -9,9 +9,6 @@ from typing import List, Generator
 from collections import Counter
 
 import cv2
-from langdetect import detect
-from langdetect.lang_detect_exception import LangDetectException
-import random
 
 from core.paddle_client import OcrProcessingError, SpottingItem, PaddleClient
 from core.jsonl_to_srt import jsonl_to_srt
@@ -121,10 +118,10 @@ async def process_ocr(
     UPLOAD_DIR = "uploads"
     video_path = os.path.join(UPLOAD_DIR, video_filename)
     video_path_obj = Path(video_path)
-    jsonl_path = video_path_obj.with_suffix(".jsonl")
+    jsonl_path_obj = video_path_obj.with_suffix(".jsonl")
 
     # 마지막으로 OCR 처리된 프레임 번호 확인
-    last_frame_number = get_last_frame_number(jsonl_path)
+    last_frame_number = get_last_frame_number(jsonl_path_obj)
 
     # 영상 정보 추출
     cap = cv2.VideoCapture(video_path)
@@ -156,7 +153,7 @@ async def process_ocr(
     running: set[asyncio.Task] = set()
 
     # CSV 파일에 OCR 결과를 저장하면 진행
-    jsonl_file = jsonl_path.open("a", newline="", encoding="utf-8")
+    jsonl_file = jsonl_path_obj.open("a", newline="", encoding="utf-8")
     try:
         #  결과를 순서대로 내보내기 위한 우선순위 큐
         heap: list[tuple[int, str]] = []
@@ -212,9 +209,6 @@ async def process_ocr(
             frame_number, spotting_items = heappop(heap)
             write_json(frame_number, spotting_items)
         jsonl_file.flush()
-        
-        # 진행 상황 업데이트
-        yield 100
     finally:
         if running:
             for task in list(running):
@@ -225,29 +219,7 @@ async def process_ocr(
         if cap.isOpened():
             cap.release()
 
-    # # OCR 완료 후 CSV 파일 읽기
-    # non_empty_texts: List[str] = []
-    # with open(jsonl_path, 'r', encoding='utf-8') as jsonl_file:
-    #     for row in csv.DictReader(jsonl_file):
-    #         text_value = row['text']
-    #         if text_value and text_value.strip():
-    #             non_empty_texts.append(text_value.strip())
-
-    # # 언어 감지 및 자막 경로 결정
-    # langs: List[str] = []
-    # if non_empty_texts:
-    #     sample_size = min(100, len(non_empty_texts))
-    #     for text_content in random.sample(non_empty_texts, sample_size):
-    #         try:
-    #             langs.append(detect(text_content))
-    #         except LangDetectException:
-    #             continue
-    # most_common_lang = Counter(langs).most_common(1)[0][0] if langs else "un"
-
-    # csv_path_obj = Path(jsonl_path)
-    # srt_path = csv_path_obj.with_suffix(f".{most_common_lang}.srt")
-
-    # jsonl_to_srt(csv_path_obj)
+    jsonl_to_srt(jsonl_path_obj)
 
     # 진행 상황 100%로 업데이트
     yield 100

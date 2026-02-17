@@ -1,5 +1,6 @@
 import sys
 import json
+import random
 import argparse
 from pathlib import Path
 from dataclasses import dataclass, field
@@ -13,6 +14,8 @@ import unicodedata
 from norfair import Detection, Tracker
 from norfair.tracker import TrackedObject
 from PIL import Image, ImageDraw, ImageFont
+from langdetect import detect
+from langdetect.lang_detect_exception import LangDetectException
 
 from core.paddle_client import SpottingItem
 
@@ -257,9 +260,8 @@ def _dump_visualized_frames(video_path: Path, frame_infos: list[FrameInfo], outp
     print(f"[Viz] 저장 완료: {saved_count}개, 건너뜀: {skipped_count}개")
 
 
-def jsonl_to_srt(jsonl_path: str, visualize=False) -> Path:
+def jsonl_to_srt(jsonl_path_obj: Path, visualize=False):
     # 경로 확인
-    jsonl_path_obj = Path(jsonl_path)
     if not jsonl_path_obj.exists():
         raise FileNotFoundError(f"JSONL file not found: {jsonl_path_obj}")
     if visualize:
@@ -584,8 +586,18 @@ def jsonl_to_srt(jsonl_path: str, visualize=False) -> Path:
         h = total_minutes // 60
         return f"{h:02d}:{m:02d}:{s:02d},{ms:03d}"
 
+    # 언어 감지 및 자막 경로 결정
+    langs: List[str] = []
+    sample_size = min(100, len(segments))
+    for seg in random.sample(segments, sample_size):
+        try:
+            langs.append(detect(seg.text))
+        except LangDetectException:
+            continue
+    most_common_lang = Counter(langs).most_common(1)[0][0] if langs else "un"
+    srt_path = jsonl_path_obj.with_suffix(f".{most_common_lang}.srt")
+
     # SRT 파일 쓰기
-    srt_path = jsonl_path_obj.with_suffix(".srt")
     with srt_path.open("w", encoding="utf-8", newline="\n") as handle:
         first = True
         for seg in segments:
@@ -595,18 +607,6 @@ def jsonl_to_srt(jsonl_path: str, visualize=False) -> Path:
             handle.write(f"{seg.index}\n")
             handle.write(f"{to_srt_timestamp(seg.start)} --> {to_srt_timestamp(seg.end)}\n")
             handle.write(f"{seg.text}\n")
-    return srt_path
-
-
-def convert_csv_to_srt(jsonl_path: str | Path, srt_path: str | Path | None = None) -> Path:
-    out_path = jsonl_to_srt(jsonl_path)
-    if srt_path is None:
-        return out_path
-
-    target_path = Path(srt_path)
-    if out_path != target_path:
-        target_path.write_text(out_path.read_text(encoding="utf-8"), encoding="utf-8", newline="\n")
-    return target_path
 
 
 def main():
