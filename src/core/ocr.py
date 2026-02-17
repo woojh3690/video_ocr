@@ -1,12 +1,10 @@
 import os
-import csv
 import json
 import base64
 import asyncio
 from pathlib import Path
 from heapq import heappush, heappop
 from typing import List, Generator
-from collections import Counter
 
 import cv2
 
@@ -152,7 +150,7 @@ async def process_ocr(
     
     running: set[asyncio.Task] = set()
 
-    # CSV 파일에 OCR 결과를 저장하면 진행
+    # JSONL 파일에 OCR 결과를 저장하면 진행
     jsonl_file = jsonl_path_obj.open("a", newline="", encoding="utf-8")
     try:
         #  결과를 순서대로 내보내기 위한 우선순위 큐

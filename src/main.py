@@ -666,16 +666,16 @@ def delete_task(task_id: str):
     """
     작업 삭제 기능 구현:
     - tasks 딕셔너리에서 해당 작업 삭제
-    - 관련 파일(CSV, SRT)이 존재하면 삭제
+    - 관련 파일(JSONL, SRT)이 존재하면 삭제
     """
     if task_id in tasks:
         video_filename = tasks[task_id].video_filename
         if video_filename:
             video_path = os.path.join(UPLOAD_DIR, video_filename)
             video_path_obj = Path(video_path)
-            csv_path = str(video_path_obj.with_suffix(".csv"))
-            if os.path.exists(csv_path):
-                os.remove(csv_path)
+            jsonl_path = str(video_path_obj.with_suffix(".jsonl"))
+            if os.path.exists(jsonl_path):
+                os.remove(jsonl_path)
         del tasks[task_id]
 
 

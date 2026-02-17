@@ -2,12 +2,12 @@
 
 ## Project Structure & Module Organization
 - `src/main.py`: FastAPI app entrypoint (routes, websocket, queue, streaming).
-- `src/core/`: Core OCR/business modules (`ocr.py`, `csv_to_srt.py`, `docker_manager.py`, `settings_manager.py`).
+- `src/core/`: Core OCR/business modules (`ocr.py`, `jsonl_to_srt.py`, `docker_manager.py`, `settings_manager.py`).
 - `src/templates/`: Jinja2 templates (`index.html`, `settings.html`).
 - `src/static/`: Frontend assets (`style.css`, `script.js`, `settings.js`, `favicon.ico`).
 - `src/settings.json`: Runtime settings file.
 - `src/uploads/`: Uploaded videos and generated outputs (served via `/videos/...`).
-- `test.py`, `test.csv`: Root-level ad-hoc test script and sample data.
+- `test.py`, `test.jsonl`: Root-level ad-hoc test script and sample data.
 - `Dockerfile`: Production image (Python 3.13, ffmpeg, OpenCV, uvicorn entrypoint).
 
 ## Coding Style & Naming Conventions
