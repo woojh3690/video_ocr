@@ -333,6 +333,7 @@ def jsonl_to_srt(jsonl_path: str, visualize=False) -> Path:
     # 트래커 파라미터 초기화
     text_weight_base = 0.24
     max_text_weight_at_conf = 0.90
+    force_match_similarity = 0.30
     strong_mismatch_similarity = 0.35
     mismatch_penalty = 0.08
     
@@ -349,6 +350,8 @@ def jsonl_to_srt(jsonl_path: str, visualize=False) -> Path:
         conf_factor = 1.0
         if det_text and trk_text:
             similarity = SequenceMatcher(None, det_text, trk_text).ratio()
+            if similarity <= force_match_similarity:
+                return 1.0
             text_distance = 1.0 - similarity
 
             scaled = min(1.0, conf_factor / max_text_weight_at_conf)
