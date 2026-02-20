@@ -281,3 +281,19 @@ body.settings-page {
 #mask-controls.mask-disabled {
     opacity: 0.6;
 }
+
+#preview-canvas {
+    border: 1px solid #d4d8e2;
+    background-color: #000;
+}
+
+.subtitle-color-row {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    margin-bottom: 6px;
+}
+
+.subtitle-color-row input[type="number"] {
+    width: 70px;
+}

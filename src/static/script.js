@@ -18,6 +18,14 @@ const fullScreenOcrToggle = document.getElementById('fullScreenOcrToggle');
 const maskToggle = document.getElementById('maskToggle');
 const clearMaskBtn = document.getElementById('clearMaskBtn');
 const maskControls = document.getElementById('mask-controls');
+const subtitleColorPreprocessToggle = document.getElementById('subtitleColorPreprocessToggle');
+const subtitleColorList = document.getElementById('subtitle-color-list');
+const addSubtitleColorBtn = document.getElementById('addSubtitleColorBtn');
+const previewContainer = document.getElementById('preview-container');
+const previewCanvas = document.getElementById('preview-canvas');
+const previewCtx = previewCanvas.getContext('2d', { willReadFrequently: true });
+const previewWorkCanvas = document.createElement('canvas');
+const previewWorkCtx = previewWorkCanvas.getContext('2d', { willReadFrequently: true });
 
 let vfilename = null;
 let currentPath = '';
@@ -37,10 +45,12 @@ let startLeft = 0;
 let maskDrawing = false;
 let maskStartX = 0;
 let maskStartY = 0;
+let previewRafId = null;
 
 const MIN_BOX_SIZE = 20;
 const MIN_MASK_SIZE = 10;
 const VIDEO_EXTENSIONS = ['.mp4', '.avi', '.mov', '.mkv', '.webm', '.mpg', '.mpeg', '.wmv'];
+const DEFAULT_SUBTITLE_COLOR_RULE = { r: 0, g: 0, b: 0, tolerance: 20 };
 
 // WebSocket 연결 (단일 연결)
 const ws = new WebSocket(`ws://${location.host}/ws/tasks`);
@@ -181,6 +191,152 @@ function updateMaskControls() {
     }
 }
 
+function toValidByte(value, fallback = 0) {
+    const parsed = Number.parseInt(String(value ?? ''), 10);
+    if (Number.isNaN(parsed)) {
+        return fallback;
+    }
+    return clamp(parsed, 0, 255);
+}
+
+function createSubtitleColorRow(initial = DEFAULT_SUBTITLE_COLOR_RULE) {
+    const row = document.createElement('div');
+    row.className = 'subtitle-color-row';
+
+    row.innerHTML = `
+        <input type="number" class="form-control form-control-sm color-r" min="0" max="255" value="${toValidByte(initial.r)}" title="R">
+        <input type="number" class="form-control form-control-sm color-g" min="0" max="255" value="${toValidByte(initial.g)}" title="G">
+        <input type="number" class="form-control form-control-sm color-b" min="0" max="255" value="${toValidByte(initial.b)}" title="B">
+        <input type="number" class="form-control form-control-sm color-tolerance" min="0" max="255" value="${toValidByte(initial.tolerance, 20)}" title="Tolerance">
+        <button type="button" class="btn btn-outline-danger btn-sm remove-color-btn">삭제</button>
+    `;
+
+    row.querySelectorAll('input').forEach((input) => {
+        const onInputChange = () => {
+            const fallback = input.classList.contains('color-tolerance') ? 20 : 0;
+            input.value = String(toValidByte(input.value, fallback));
+            refreshPreviewFrame();
+        };
+        input.addEventListener('input', onInputChange);
+        input.addEventListener('change', onInputChange);
+    });
+
+    row.querySelector('.remove-color-btn').addEventListener('click', () => {
+        row.remove();
+        if (!subtitleColorList.children.length) {
+            subtitleColorList.appendChild(createSubtitleColorRow(DEFAULT_SUBTITLE_COLOR_RULE));
+        }
+        refreshPreviewFrame();
+    });
+
+    return row;
+}
+
+function getSubtitleColorRules() {
+    const rows = subtitleColorList.querySelectorAll('.subtitle-color-row');
+    return Array.from(rows).map((row) => ({
+        r: toValidByte(row.querySelector('.color-r').value),
+        g: toValidByte(row.querySelector('.color-g').value),
+        b: toValidByte(row.querySelector('.color-b').value),
+        tolerance: toValidByte(row.querySelector('.color-tolerance').value, 20),
+    }));
+}
+
+function drawRawPreviewFrame() {
+    if (!video.videoWidth || !video.videoHeight || !video.clientWidth || !video.clientHeight) {
+        return false;
+    }
+
+    previewWorkCanvas.width = video.videoWidth;
+    previewWorkCanvas.height = video.videoHeight;
+    previewCanvas.width = video.videoWidth;
+    previewCanvas.height = video.videoHeight;
+
+    previewWorkCtx.drawImage(video, 0, 0, previewWorkCanvas.width, previewWorkCanvas.height);
+    previewCtx.drawImage(previewWorkCanvas, 0, 0, previewCanvas.width, previewCanvas.height);
+    return true;
+}
+
+function applySubtitleColorFilterToPreview() {
+    const rules = getSubtitleColorRules();
+    if (!rules.length) {
+        return;
+    }
+
+    const imageData = previewCtx.getImageData(0, 0, previewCanvas.width, previewCanvas.height);
+    const data = imageData.data;
+
+    const useWhiteBackground = rules.some((rule) => Math.max(rule.r, rule.g, rule.b) <= 70);
+    const fill = useWhiteBackground ? 255 : 0;
+
+    for (let i = 0; i < data.length; i += 4) {
+        const r = data[i];
+        const g = data[i + 1];
+        const b = data[i + 2];
+
+        let matched = false;
+        for (const rule of rules) {
+            if (
+                Math.abs(r - rule.r) <= rule.tolerance &&
+                Math.abs(g - rule.g) <= rule.tolerance &&
+                Math.abs(b - rule.b) <= rule.tolerance
+            ) {
+                matched = true;
+                break;
+            }
+        }
+
+        if (!matched) {
+            data[i] = fill;
+            data[i + 1] = fill;
+            data[i + 2] = fill;
+        }
+    }
+
+    previewCtx.putImageData(imageData, 0, 0);
+}
+
+function refreshPreviewFrame() {
+    if (!vfilename || !previewCtx || !previewWorkCtx) {
+        return;
+    }
+
+    if (!drawRawPreviewFrame()) {
+        return;
+    }
+
+    if (subtitleColorPreprocessToggle.checked) {
+        applySubtitleColorFilterToPreview();
+    }
+}
+
+function stopPreviewLoop() {
+    if (previewRafId !== null) {
+        cancelAnimationFrame(previewRafId);
+        previewRafId = null;
+    }
+}
+
+function previewLoop() {
+    refreshPreviewFrame();
+    if (!video.paused && !video.ended) {
+        previewRafId = requestAnimationFrame(previewLoop);
+    } else {
+        previewRafId = null;
+    }
+}
+
+function startPreviewLoop() {
+    if (previewRafId !== null) {
+        return;
+    }
+    previewRafId = requestAnimationFrame(previewLoop);
+}
+
+function updatePreviewVisibility() {
+    previewContainer.style.display = vfilename ? 'block' : 'none';
+}
+
 function loadDirectory(path = '') {
     fetch(`/browse/?path=${encodeURIComponent(path)}`)
         .then((resp) => resp.json())
@@ -269,6 +425,8 @@ function selectVideo(path) {
         clearMaskBox();
         updateBoundingBoxInteraction();
         updateMaskControls();
+        updatePreviewVisibility();
+        refreshPreviewFrame();
     };
 }
 
@@ -433,11 +591,13 @@ function switchToOcrCreationView() {
     clearMaskBox();
     updateBoundingBoxInteraction();
     updateMaskControls();
+    updatePreviewVisibility();
 }
 
 function switchToTaskListView() {
     ocrCreationView.style.display = 'none';
     taskListView.style.display = 'block';
+    stopPreviewLoop();
 }
 
 // 이벤트: "새 OCR 작업 추가" 버튼 -> OCR 생성 뷰로 전환
@@ -466,6 +626,24 @@ maskToggle.addEventListener('change', () => {
 clearMaskBtn.addEventListener('click', () => {
     clearMaskBox();
 });
+
+subtitleColorPreprocessToggle.addEventListener('change', () => {
+    refreshPreviewFrame();
+});
+
+addSubtitleColorBtn.addEventListener('click', () => {
+    subtitleColorList.appendChild(createSubtitleColorRow(DEFAULT_SUBTITLE_COLOR_RULE));
+    refreshPreviewFrame();
+});
+
+video.addEventListener('play', startPreviewLoop);
+video.addEventListener('pause', () => {
+    stopPreviewLoop();
+    refreshPreviewFrame();
+});
+video.addEventListener('seeked', refreshPreviewFrame);
+video.addEventListener('timeupdate', refreshPreviewFrame);
+video.addEventListener('loadeddata', refreshPreviewFrame);
 
 
 
@@ -684,12 +862,15 @@ startOcrBtn.addEventListener('click', async () => {
     }
 
     const formData = new FormData();
+    const subtitleColorRules = getSubtitleColorRules();
     formData.append('video_filename', vfilename);
     formData.append('x', String(x));
     formData.append('y', String(y));
     formData.append('width', String(width));
     formData.append('height', String(height));
     formData.append('full_screen_ocr', fullScreenOcr ? 'true' : 'false');
+    formData.append('subtitle_color_enabled', subtitleColorPreprocessToggle.checked ? 'true' : 'false');
+    formData.append('subtitle_color_ranges', JSON.stringify(subtitleColorRules));
 
     if (startTime !== 0) {
         formData.append('start_time', String(startTime));
@@ -737,3 +918,5 @@ startOcrBtn.addEventListener('click', async () => {
 
 updateBoundingBoxInteraction();
 updateMaskControls();
+subtitleColorList.appendChild(createSubtitleColorRow(DEFAULT_SUBTITLE_COLOR_RULE));
+updatePreviewVisibility();
