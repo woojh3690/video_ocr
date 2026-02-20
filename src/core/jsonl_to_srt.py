@@ -281,7 +281,10 @@ def jsonl_to_srt(jsonl_path_obj: Path, visualize=False):
             spotting_items = []
             for item in ocr_res_json["spotting_items"]:
                 spotting_obj = SpottingItem.from_dict(item)
-                spotting_obj.text = clean_ocr_text(spotting_obj.text)
+                spotting_obj = SpottingItem(
+                    text=clean_ocr_text(spotting_obj.text),
+                    quad=spotting_obj.quad,
+                )
                 spotting_items.append(spotting_obj)
             ocr_results.append(FrameInfo(
                 frame_idx=frame_idx,
