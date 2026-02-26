@@ -143,12 +143,17 @@ async def ocr_one_frame(client: openai.AsyncOpenAI, frame_idx: int,
         ]}
     ]
     try:
-        completion = await client.beta.chat.completions.parse(
+        completion = await client.chat.completions.parse(
             model=llm_model,
             messages=messages,
             response_format=OcrSubtitleGroup,
             temperature=0,
             max_tokens=512,
+            extra_body={
+                "chat_template_kwargs": {
+                    "enable_thinking": False
+                },
+            },
         )
         ocr_text = completion.choices[0].message.parsed.texts
         if len(ocr_text) == 1 or ocr_text == "example":
