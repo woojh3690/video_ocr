@@ -1,7 +1,8 @@
 document.addEventListener('DOMContentLoaded', () => {
     const form = document.getElementById('settings-form');
     const dockerUrlInput = document.getElementById('docker-url');
-    const dockerNameInput = document.getElementById('docker-name');
+    const dockerNameSelect = document.getElementById('docker-name');
+    const refreshDockerListButton = document.getElementById('refresh-docker-list');
     const llmBaseUrlInput = document.getElementById('llm-base-url');
     const llmModelInput = document.getElementById('llm-model');
     const kafkaToggle = document.getElementById('kafka-enabled');
@@ -25,6 +26,65 @@ document.addEventListener('DOMContentLoaded', () => {
         kafkaUrlInput.parentElement.classList.toggle('disabled-field', !enabled);
     };
 
+    const setDockerListLoading = (isLoading) => {
+        dockerNameSelect.disabled = isLoading;
+        refreshDockerListButton.disabled = isLoading;
+    };
+
+    const renderDockerOptions = (containers, selectedName) => {
+        dockerNameSelect.innerHTML = '';
+
+        const placeholder = document.createElement('option');
+        placeholder.value = '';
+        placeholder.textContent = containers.length ? '컨테이너를 선택하세요' : '표시할 컨테이너가 없습니다';
+        dockerNameSelect.appendChild(placeholder);
+
+        const knownNames = new Set();
+        containers.forEach((containerName) => {
+            const option = document.createElement('option');
+            option.value = containerName;
+            option.textContent = containerName;
+            dockerNameSelect.appendChild(option);
+            knownNames.add(containerName);
+        });
+
+        if (selectedName && !knownNames.has(selectedName)) {
+            const missingOption = document.createElement('option');
+            missingOption.value = selectedName;
+            missingOption.textContent = `${selectedName} (현재 설정 - 목록에 없음)`;
+            dockerNameSelect.appendChild(missingOption);
+        }
+
+        if (selectedName) {
+            dockerNameSelect.value = selectedName;
+        }
+    };
+
+    const fetchDockerContainers = async (selectedName) => {
+        const dockerUrl = dockerUrlInput.value.trim();
+        if (!dockerUrl) {
+            renderDockerOptions([], selectedName);
+            return;
+        }
+
+        setDockerListLoading(true);
+        try {
+            const res = await fetch(`/api/docker/containers?docker_url=${encodeURIComponent(dockerUrl)}`);
+            const responseBody = await res.json().catch(() => ({}));
+            if (!res.ok) {
+                throw new Error(responseBody.detail || '컨테이너 목록을 불러오지 못했습니다.');
+            }
+
+            const containers = Array.isArray(responseBody.containers) ? responseBody.containers : [];
+            renderDockerOptions(containers, selectedName);
+        } catch (error) {
+            renderDockerOptions([], selectedName);
+            showFeedback('warning', error.message || '컨테이너 목록을 불러오지 못했습니다.');
+        } finally {
+            setDockerListLoading(false);
+        }
+    };
+
     const fetchSettings = async () => {
         try {
             const res = await fetch('/api/settings');
@@ -33,12 +93,12 @@ document.addEventListener('DOMContentLoaded', () => {
             }
             const settings = await res.json();
             dockerUrlInput.value = settings.docker_url || '';
-            dockerNameInput.value = settings.docker_name || '';
             llmBaseUrlInput.value = settings.llm_base_url || '';
             llmModelInput.value = settings.llm_model || '';
             kafkaToggle.checked = Boolean(settings.kafka_enabled);
             kafkaUrlInput.value = settings.kafka_url || '';
             toggleKafkaUrl(kafkaToggle.checked);
+            await fetchDockerContainers(settings.docker_name || '');
         } catch (error) {
             showFeedback('danger', error.message || '설정을 불러올 수 없습니다.');
         }
@@ -47,7 +107,7 @@ document.addEventListener('DOMContentLoaded', () => {
     const collectPayload = () => {
         const payload = {
             docker_url: dockerUrlInput.value.trim(),
-            docker_name: dockerNameInput.value.trim(),
+            docker_name: dockerNameSelect.value.trim(),
             llm_model: llmModelInput.value.trim(),
             kafka_enabled: kafkaToggle.checked,
             kafka_url: kafkaUrlInput.value.trim(),
@@ -69,7 +129,7 @@ document.addEventListener('DOMContentLoaded', () => {
             return 'Docker 엔드포인트를 입력해주세요.';
         }
         if (!payload.docker_name) {
-            return '컨테이너 이름을 입력해주세요.';
+            return '컨테이너 이름을 선택해주세요.';
         }
         if (!payload.llm_model) {
             return 'LLM 모델을 입력해주세요.';
@@ -129,6 +189,12 @@ document.addEventListener('DOMContentLoaded', () => {
 
     kafkaToggle.addEventListener('change', () => {
         toggleKafkaUrl(kafkaToggle.checked);
+    });
+    refreshDockerListButton.addEventListener('click', async () => {
+        await fetchDockerContainers(dockerNameSelect.value.trim());
+    });
+    dockerUrlInput.addEventListener('blur', async () => {
+        await fetchDockerContainers(dockerNameSelect.value.trim());
     });
 
     fetchSettings();

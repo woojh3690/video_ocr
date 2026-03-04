@@ -242,6 +242,35 @@ body.settings-page {
     margin-bottom: 1rem;
 }
 
+.docker-name-header {
+    position: relative;
+    margin-bottom: .5rem;
+    padding-right: 7.5rem;
+}
+
+.docker-name-header label {
+    margin-bottom: 0;
+}
+
+#refresh-docker-list {
+    position: absolute;
+    top: 50%;
+    right: 0;
+    transform: translateY(-50%);
+}
+
+@media (max-width: 767.98px) {
+    .docker-name-header {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+    }
+
+    #refresh-docker-list {
+        position: static;
+    }
+}
+
 .disabled-field {
     opacity: 0.55;
 }

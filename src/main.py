@@ -249,6 +249,26 @@ async def get_settings_api():
     return settings.model_dump()
 
 
+@app.get("/api/docker/containers")
+async def get_docker_containers_api(docker_url: Optional[str] = None):
+    target_docker_url = (docker_url or current_settings.docker_url or "").strip()
+    if not target_docker_url:
+        raise HTTPException(status_code=400, detail="Docker 엔드포인트를 입력해주세요.")
+
+    try:
+        target_docker_manager = DockerManager(target_docker_url)
+        containers = target_docker_manager.list_containers()
+    except (APIError, DockerException) as exc:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Docker 컨테이너 목록을 불러오지 못했습니다",
+        ) from exc
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=f"Docker 연결 중 오류가 발생했습니다: {exc}") from exc
+
+    return {"docker_url": target_docker_url, "containers": containers}
+
+
 @app.put("/api/settings")
 async def update_settings_api(payload: SettingsUpdateRequest):
     updates = payload.model_dump(exclude_unset=True)

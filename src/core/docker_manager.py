@@ -1,9 +1,16 @@
 import docker
 from docker.errors import NotFound, APIError
+from typing import List
 
 class DockerManager:
     def __init__(self, base_url: str):
         self.client = docker.DockerClient(base_url=base_url)
+
+    def list_containers(self) -> List[str]:
+        containers = self.client.containers.list(all=True)
+        results = [container.name for container in containers]
+        results.sort()
+        return results
 
     def stop_container(self, name: str, timeout: int = 30) -> None:
         try:
