@@ -41,12 +41,15 @@
                 <div class="settings-section-toggle d-flex align-items-center justify-content-start">
                     <div class="custom-control custom-switch">
                         <input type="checkbox" class="custom-control-input" id="docker-enabled">
-                        <label class="custom-control-label" for="docker-enabled">Docker 자동 제어 사용</label>
+                        <label class="custom-control-label" for="docker-enabled">vLLM 컨테이너 자동 시작/중지</label>
                     </div>
                 </div>
+                <small class="form-text text-muted mb-3">
+                    켜면 OCR 작업 시작 시 컨테이너를 자동으로 시작하고, 대기 작업이 없으면 자동으로 중지합니다.
+                </small>
                 <div class="form-row" id="docker-fields">
                     <div class="form-group col-md-6">
-                        <label for="docker-url">Docker 엔드포인트</label>
+                        <label for="docker-url">Docker 데몬 엔드포인트</label>
                         <input type="text" id="docker-url" class="form-control" placeholder="예: tcp://127.0.0.1:2375" required>
                         <small class="form-text text-muted">형식: tcp://&lt;host&gt;:&lt;port&gt;</small>
                     </div>
@@ -67,9 +70,12 @@
                 <div class="settings-section-toggle d-flex align-items-center justify-content-start">
                     <div class="custom-control custom-switch">
                         <input type="checkbox" class="custom-control-input" id="kafka-enabled">
-                        <label class="custom-control-label" for="kafka-enabled">Kafka 사용</label>
+                        <label class="custom-control-label" for="kafka-enabled">OCR 완료 알림을 Kafka로 전송</label>
                     </div>
                 </div>
+                <small class="form-text text-muted mb-3">
+                    켜면 OCR 완료 이벤트를 Kafka 토픽으로 전송합니다. 끄면 Kafka 전송을 하지 않습니다.
+                </small>
                 <div class="form-group">
                     <label for="kafka-url">Kafka Bootstrap 서버</label>
                     <input type="text" id="kafka-url" class="form-control" placeholder="192.168.1.17:19092">
