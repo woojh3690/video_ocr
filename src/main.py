@@ -69,6 +69,7 @@ class SettingsUpdateRequest(BaseModel):
     kafka_url: Optional[str] = None
     llm_base_url: Optional[str] = None
     llm_model: Optional[str] = None
+    llm_api_key: Optional[str] = None
 
     model_config = ConfigDict(extra="forbid")
 
@@ -323,7 +324,10 @@ async def update_settings_api(payload: SettingsUpdateRequest):
 async def is_vllm_health():
     """Check if vllm server is reachable"""
     settings = current_settings
-    client = openai.AsyncOpenAI(base_url=settings.llm_base_url or None, api_key="dummy_key")
+    client = openai.AsyncOpenAI(
+        base_url=settings.llm_base_url or None,
+        api_key=settings.llm_api_key or "dummy_key",
+    )
     try:
         await client.models.list()
         return True

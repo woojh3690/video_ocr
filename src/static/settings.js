@@ -7,6 +7,7 @@ document.addEventListener('DOMContentLoaded', () => {
     const refreshDockerListButton = document.getElementById('refresh-docker-list');
     const llmBaseUrlInput = document.getElementById('llm-base-url');
     const llmModelInput = document.getElementById('llm-model');
+    const llmApiKeyInput = document.getElementById('llm-api-key');
     const kafkaToggle = document.getElementById('kafka-enabled');
     const kafkaUrlInput = document.getElementById('kafka-url');
     const feedback = document.getElementById('settings-feedback');
@@ -110,6 +111,7 @@ document.addEventListener('DOMContentLoaded', () => {
             dockerUrlInput.value = settings.docker_url || '';
             llmBaseUrlInput.value = settings.llm_base_url || '';
             llmModelInput.value = settings.llm_model || '';
+            llmApiKeyInput.value = settings.llm_api_key || '';
             kafkaToggle.checked = Boolean(settings.kafka_enabled);
             kafkaUrlInput.value = settings.kafka_url || '';
             toggleDockerFields(dockerToggle.checked);
@@ -132,6 +134,8 @@ document.addEventListener('DOMContentLoaded', () => {
 
         const llmBaseUrl = llmBaseUrlInput.value.trim();
         payload.llm_base_url = llmBaseUrl.length ? llmBaseUrl : null;
+        const llmApiKey = llmApiKeyInput.value.trim();
+        payload.llm_api_key = llmApiKey.length ? llmApiKey : null;
 
         if (!payload.kafka_enabled && !payload.kafka_url.length) {
             // Keep previous value server-side; remove field if empty while disabled.

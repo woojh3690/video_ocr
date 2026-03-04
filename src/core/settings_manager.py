@@ -14,6 +14,7 @@ DEFAULT_SETTINGS = {
     "kafka_url": "192.168.0.2:19092",
     "llm_base_url": None,
     "llm_model": "gpt-5-nano",
+    "llm_api_key": None,
 }
 
 
@@ -25,6 +26,7 @@ class AppSettings(BaseModel):
     kafka_url: str = Field(default=DEFAULT_SETTINGS["kafka_url"])
     llm_base_url: Optional[str] = Field(default=DEFAULT_SETTINGS["llm_base_url"])
     llm_model: str = Field(default=DEFAULT_SETTINGS["llm_model"])
+    llm_api_key: Optional[str] = Field(default=DEFAULT_SETTINGS["llm_api_key"])
 
     model_config = ConfigDict(validate_assignment=True)
 

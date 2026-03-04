@@ -209,7 +209,10 @@ async def process_ocr(
 
     # ollama 클라이언트 초기화
     settings = get_settings()
-    client = openai.AsyncOpenAI(base_url=settings.llm_base_url or None, api_key="dummy_key")
+    client = openai.AsyncOpenAI(
+        base_url=settings.llm_base_url or None,
+        api_key=settings.llm_api_key or "dummy_key",
+    )
 
     # vllm 서버가 실행 중인지 확인
     try:
