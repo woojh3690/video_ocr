@@ -387,6 +387,7 @@ async def browse(path: str = ""):
     entries = []
     for entry in os.scandir(target):
         entries.append({"name": entry.name, "is_dir": entry.is_dir()})
+    entries.sort(key=lambda item: (not item["is_dir"], item["name"].casefold()))
     rel_path = os.path.relpath(target, base_dir)
     if rel_path == ".":
         rel_path = ""
