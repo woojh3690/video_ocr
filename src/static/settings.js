@@ -45,7 +45,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
         const placeholder = document.createElement('option');
         placeholder.value = '';
-        placeholder.textContent = containers.length ? '컨테이너를 선택하세요' : '표시할 컨테이너가 없습니다';
+        placeholder.textContent = '컨테이너를 선택하세요'
         dockerNameSelect.appendChild(placeholder);
 
         const knownNames = new Set();

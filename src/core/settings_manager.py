@@ -8,8 +8,8 @@ from pydantic import BaseModel, ValidationError, Field, ConfigDict
 
 DEFAULT_SETTINGS = {
     "docker_enabled": False,
-    "docker_url": "tcp://192.168.0.3:2375",
-    "docker_name": "vllm_30b",
+    "docker_url": "",
+    "docker_name": "",
     "kafka_enabled": False,
     "kafka_url": "192.168.0.2:19092",
     "llm_base_url": None,
