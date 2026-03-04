@@ -13,7 +13,7 @@ DEFAULT_SETTINGS = {
     "kafka_enabled": False,
     "kafka_url": "192.168.0.2:19092",
     "llm_base_url": None,
-    "llm_model": "Qwen/Qwen3-VL-30B-A3B-Instruct-FP8",
+    "llm_model": "gpt-5-nano",
 }
 
 
