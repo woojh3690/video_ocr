@@ -23,6 +23,21 @@
 
         <form id="settings-form" class="settings-card shadow-sm rounded p-4">
             <section class="mb-4">
+                <h5 class="settings-section-title">LLM</h5>
+                <div class="form-row">
+                    <div class="form-group col-md-6">
+                        <label for="llm-base-url">LLM Base URL</label>
+                        <input type="text" id="llm-base-url" class="form-control" placeholder="http://127.0.0.1:8000">
+                        <small class="form-text text-muted">비워두면 기본 OpenAI 엔드포인트를 사용합니다.</small>
+                    </div>
+                    <div class="form-group col-md-6">
+                        <label for="llm-model">LLM 모델</label>
+                        <input type="text" id="llm-model" class="form-control" placeholder="Qwen/Qwen2.5-VL-3B-Instruct" required>
+                    </div>
+                </div>
+            </section>
+
+            <section class="mb-4">
                 <div class="settings-section-toggle d-flex align-items-center justify-content-start">
                     <div class="custom-control custom-switch">
                         <input type="checkbox" class="custom-control-input" id="docker-enabled">
@@ -44,21 +59,6 @@
                             <option value="">컨테이너를 선택하세요</option>
                         </select>
                         <small class="form-text text-muted">엔드포인트를 입력한 뒤 목록에서 선택하세요.</small>
-                    </div>
-                </div>
-            </section>
-
-            <section class="mb-4">
-                <h5 class="settings-section-title">LLM</h5>
-                <div class="form-row">
-                    <div class="form-group col-md-6">
-                        <label for="llm-base-url">LLM Base URL</label>
-                        <input type="text" id="llm-base-url" class="form-control" placeholder="http://127.0.0.1:8000">
-                        <small class="form-text text-muted">비워두면 기본 OpenAI 엔드포인트를 사용합니다.</small>
-                    </div>
-                    <div class="form-group col-md-6">
-                        <label for="llm-model">LLM 모델</label>
-                        <input type="text" id="llm-model" class="form-control" placeholder="Qwen/Qwen2.5-VL-3B-Instruct" required>
                     </div>
                 </div>
             </section>
