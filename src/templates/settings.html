@@ -23,8 +23,14 @@
 
         <form id="settings-form" class="settings-card shadow-sm rounded p-4">
             <section class="mb-4">
-                <h5 class="settings-section-title">Docker</h5>
-                <div class="form-row">
+                <h5 class="settings-section-title d-flex align-items-center justify-content-between">
+                    <span>Docker</span>
+                    <div class="custom-control custom-switch">
+                        <input type="checkbox" class="custom-control-input" id="docker-enabled">
+                        <label class="custom-control-label" for="docker-enabled">Docker 자동 제어 사용</label>
+                    </div>
+                </h5>
+                <div class="form-row" id="docker-fields">
                     <div class="form-group col-md-6">
                         <label for="docker-url">Docker 엔드포인트</label>
                         <input type="text" id="docker-url" class="form-control" placeholder="tcp://127.0.0.1:2375" required>

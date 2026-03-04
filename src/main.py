@@ -62,6 +62,7 @@ class Task:
 
 
 class SettingsUpdateRequest(BaseModel):
+    docker_enabled: Optional[bool] = None
     docker_url: Optional[str] = None
     docker_name: Optional[str] = None
     kafka_enabled: Optional[bool] = None
@@ -72,7 +73,7 @@ class SettingsUpdateRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
 current_settings: AppSettings = settings_manager.get_settings()
-docker_manager: DockerManager
+docker_manager: Optional[DockerManager] = None
 kafka_producer: Optional[KafkaProducer] = None
 docker_name: str = current_settings.docker_name
 
@@ -97,7 +98,13 @@ def apply_runtime_settings(settings: AppSettings) -> None:
 
     current_settings = settings
     docker_name = settings.docker_name
-    docker_manager = DockerManager(settings.docker_url)
+    docker_manager = None
+    if settings.docker_enabled:
+        try:
+            docker_manager = DockerManager(settings.docker_url)
+        except Exception as exc:
+            print("DockerManager 초기화 실패:", exc)
+            docker_manager = None
 
     if kafka_producer is not None:
         try:
@@ -272,6 +279,30 @@ async def get_docker_containers_api(docker_url: Optional[str] = None):
 @app.put("/api/settings")
 async def update_settings_api(payload: SettingsUpdateRequest):
     updates = payload.model_dump(exclude_unset=True)
+    docker_enabled = updates.get("docker_enabled")
+    if docker_enabled is None:
+        docker_enabled = current_settings.docker_enabled
+
+    if docker_enabled:
+        docker_url_value = updates.get("docker_url", current_settings.docker_url)
+        docker_name_value = updates.get("docker_name", current_settings.docker_name)
+        if not docker_url_value or not docker_url_value.strip():
+            raise HTTPException(status_code=400, detail="Docker 엔드포인트를 입력해주세요.")
+        if not docker_name_value or not docker_name_value.strip():
+            raise HTTPException(status_code=400, detail="컨테이너 이름을 선택해주세요.")
+        try:
+            target_docker_manager = DockerManager(docker_url_value.strip())
+            container_names = target_docker_manager.list_containers()
+        except (APIError, DockerException) as exc:
+            raise HTTPException(status_code=400, detail="Docker 연결을 확인할 수 없습니다.") from exc
+        except Exception as exc:
+            raise HTTPException(status_code=400, detail=f"Docker 연결 중 오류가 발생했습니다: {exc}") from exc
+        if docker_name_value.strip() not in set(container_names):
+            raise HTTPException(
+                status_code=400,
+                detail=f"선택한 컨테이너를 찾을 수 없습니다: {docker_name_value.strip()}",
+            )
+
     kafka_enabled = updates.get("kafka_enabled")
     if kafka_enabled is None:
         kafka_enabled = current_settings.kafka_enabled
@@ -498,8 +529,19 @@ async def run_ocr_task(
     task = tasks[task_id]
 
     try:
-        # Ensure the vLLM container is running; start it if needed.
         if not await is_vllm_health():
+            if not current_settings.docker_enabled:
+                task.status = Status.failed
+                task.error = "vLLM 서버에 연결할 수 없습니다. Docker 자동 제어를 사용하지 않는 경우 서버를 먼저 실행해주세요."
+                await broadcast_update(task)
+                return
+
+            if docker_manager is None:
+                task.status = Status.failed
+                task.error = "Docker 자동 제어가 활성화되어 있지만 DockerManager를 초기화하지 못했습니다."
+                await broadcast_update(task)
+                return
+
             print("vLLM 서버가 준비되지 않았습니다. 컨테이너를 시작합니다.")
             try:
                 docker_manager.start_container(docker_name)
@@ -587,8 +629,11 @@ async def start_next_task():
         return
     next_id = get_next_waiting_task_id()
     if not next_id:
-        # 대기 중인 작업이 없으면 vLLM 컨테이너 중지로 자원 절약
-        docker_manager.stop_container(docker_name)
+        if current_settings.docker_enabled and docker_manager is not None:
+            try:
+                docker_manager.stop_container(docker_name)
+            except Exception as exc:
+                print("Docker 컨테이너 중지 실패:", exc)
         return
 
     next_task = tasks[next_id]

@@ -1,5 +1,7 @@
 document.addEventListener('DOMContentLoaded', () => {
     const form = document.getElementById('settings-form');
+    const dockerToggle = document.getElementById('docker-enabled');
+    const dockerFields = document.getElementById('docker-fields');
     const dockerUrlInput = document.getElementById('docker-url');
     const dockerNameSelect = document.getElementById('docker-name');
     const refreshDockerListButton = document.getElementById('refresh-docker-list');
@@ -24,6 +26,13 @@ document.addEventListener('DOMContentLoaded', () => {
     const toggleKafkaUrl = (enabled) => {
         kafkaUrlInput.disabled = !enabled;
         kafkaUrlInput.parentElement.classList.toggle('disabled-field', !enabled);
+    };
+
+    const toggleDockerFields = (enabled) => {
+        dockerUrlInput.disabled = !enabled;
+        dockerNameSelect.disabled = !enabled;
+        refreshDockerListButton.disabled = !enabled;
+        dockerFields.classList.toggle('disabled-field', !enabled);
     };
 
     const setDockerListLoading = (isLoading) => {
@@ -61,6 +70,11 @@ document.addEventListener('DOMContentLoaded', () => {
     };
 
     const fetchDockerContainers = async (selectedName) => {
+        if (!dockerToggle.checked) {
+            renderDockerOptions([], selectedName);
+            return;
+        }
+
         const dockerUrl = dockerUrlInput.value.trim();
         if (!dockerUrl) {
             renderDockerOptions([], selectedName);
@@ -92,11 +106,13 @@ document.addEventListener('DOMContentLoaded', () => {
                 throw new Error('설정을 불러오는 중 오류가 발생했습니다.');
             }
             const settings = await res.json();
+            dockerToggle.checked = Boolean(settings.docker_enabled);
             dockerUrlInput.value = settings.docker_url || '';
             llmBaseUrlInput.value = settings.llm_base_url || '';
             llmModelInput.value = settings.llm_model || '';
             kafkaToggle.checked = Boolean(settings.kafka_enabled);
             kafkaUrlInput.value = settings.kafka_url || '';
+            toggleDockerFields(dockerToggle.checked);
             toggleKafkaUrl(kafkaToggle.checked);
             await fetchDockerContainers(settings.docker_name || '');
         } catch (error) {
@@ -106,6 +122,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
     const collectPayload = () => {
         const payload = {
+            docker_enabled: dockerToggle.checked,
             docker_url: dockerUrlInput.value.trim(),
             docker_name: dockerNameSelect.value.trim(),
             llm_model: llmModelInput.value.trim(),
@@ -125,11 +142,11 @@ document.addEventListener('DOMContentLoaded', () => {
     };
 
     const validatePayload = (payload) => {
-        if (!payload.docker_url) {
-            return 'Docker 엔드포인트를 입력해주세요.';
+        if (payload.docker_enabled && !payload.docker_url) {
+            return 'Docker 자동 제어를 사용하려면 Docker 엔드포인트를 입력해주세요.';
         }
-        if (!payload.docker_name) {
-            return '컨테이너 이름을 선택해주세요.';
+        if (payload.docker_enabled && !payload.docker_name) {
+            return 'Docker 자동 제어를 사용하려면 컨테이너 이름을 선택해주세요.';
         }
         if (!payload.llm_model) {
             return 'LLM 모델을 입력해주세요.';
@@ -187,6 +204,10 @@ document.addEventListener('DOMContentLoaded', () => {
         }
     });
 
+    dockerToggle.addEventListener('change', async () => {
+        toggleDockerFields(dockerToggle.checked);
+        await fetchDockerContainers(dockerNameSelect.value.trim());
+    });
     kafkaToggle.addEventListener('change', () => {
         toggleKafkaUrl(kafkaToggle.checked);
     });

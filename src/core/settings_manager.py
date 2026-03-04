@@ -7,6 +7,7 @@ from pydantic import BaseModel, ValidationError, Field, ConfigDict
 
 
 DEFAULT_SETTINGS = {
+    "docker_enabled": False,
     "docker_url": "tcp://192.168.0.3:2375",
     "docker_name": "vllm_30b",
     "kafka_enabled": False,
@@ -17,6 +18,7 @@ DEFAULT_SETTINGS = {
 
 
 class AppSettings(BaseModel):
+    docker_enabled: bool = Field(default=DEFAULT_SETTINGS["docker_enabled"])
     docker_url: str = Field(default=DEFAULT_SETTINGS["docker_url"])
     docker_name: str = Field(default=DEFAULT_SETTINGS["docker_name"])
     kafka_enabled: bool = Field(default=DEFAULT_SETTINGS["kafka_enabled"])
