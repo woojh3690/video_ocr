@@ -23,13 +23,12 @@
 
         <form id="settings-form" class="settings-card shadow-sm rounded p-4">
             <section class="mb-4">
-                <h5 class="settings-section-title d-flex align-items-center justify-content-between">
-                    <span>Docker</span>
+                <div class="settings-section-toggle d-flex align-items-center justify-content-start">
                     <div class="custom-control custom-switch">
                         <input type="checkbox" class="custom-control-input" id="docker-enabled">
                         <label class="custom-control-label" for="docker-enabled">Docker 자동 제어 사용</label>
                     </div>
-                </h5>
+                </div>
                 <div class="form-row" id="docker-fields">
                     <div class="form-group col-md-6">
                         <label for="docker-url">Docker 엔드포인트</label>
@@ -65,13 +64,12 @@
             </section>
 
             <section class="mb-4">
-                <h5 class="settings-section-title d-flex align-items-center justify-content-between">
-                    <span>Kafka</span>
+                <div class="settings-section-toggle d-flex align-items-center justify-content-start">
                     <div class="custom-control custom-switch">
                         <input type="checkbox" class="custom-control-input" id="kafka-enabled">
                         <label class="custom-control-label" for="kafka-enabled">Kafka 사용</label>
                     </div>
-                </h5>
+                </div>
                 <div class="form-group">
                     <label for="kafka-url">Kafka Bootstrap 서버</label>
                     <input type="text" id="kafka-url" class="form-control" placeholder="192.168.1.17:19092">
