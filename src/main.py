@@ -151,16 +151,6 @@ PICKLE_FILENAME = 'tasks.pkl'
 tasks: Dict[str, Task] = {}
 
 
-def normalize_task_status(status: Status | str) -> Status:
-    if status in (Status.waiting, Status.running, Status.completed, Status.failed, Status.error, Status.stopping, Status.stopped):
-        return Status(status)
-    if status == "cancelling":
-        return Status.stopping
-    if status == "cancelled":
-        return Status.stopped
-    return Status.failed
-
-
 def get_active_task_id_by_video_filename(video_filename: str) -> Optional[str]:
     """같은 비디오 경로로 실행/대기 중인 작업 ID를 반환합니다."""
     target_video_path = os.path.abspath(os.path.join(UPLOAD_DIR, video_filename))
@@ -203,11 +193,10 @@ def load_tasks():
                     tasks = {}
                     for tid, data in loaded.items():
                         if isinstance(data, Task):
-                            data.status = normalize_task_status(data.status)
                             tasks[tid] = data
                         elif isinstance(data, dict):
                             data.pop('messages', None)
-                            data['status'] = normalize_task_status(data.get('status', Status.failed))
+                            data['status'] = Status(data.get('status', Status.failed))
                             tasks[tid] = Task(**data)
                         else:
                             tasks[tid] = Task(**{})
@@ -222,7 +211,6 @@ def load_tasks():
     
     # 로드된 테스크 정보에서 실행 중이던 상태를 모두 stopped 로 변경
     for t in tasks.values():
-        t.status = normalize_task_status(t.status)
         if t.status in (Status.running, Status.stopping, Status.waiting):
             t.status = Status.stopped
 
