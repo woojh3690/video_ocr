@@ -42,6 +42,15 @@ let maskStartY = 0;
 const MIN_BOX_SIZE = 20;
 const MIN_MASK_SIZE = 10;
 const VIDEO_EXTENSIONS = ['.mp4', '.avi', '.mov', '.mkv', '.webm', '.mpg', '.mpeg', '.wmv'];
+const TASK_STATUS_LABELS = {
+    waiting: '대기중',
+    running: '실행중',
+    completed: '완료됨',
+    stopping: '중지중',
+    stopped: '중지됨',
+    retryable_error: '오류',
+    fatal_error: '치명적 오류',
+};
 
 // WebSocket 연결 (단일 연결)
 const ws = new WebSocket(`ws://${location.host}/ws/tasks`);
@@ -296,7 +305,7 @@ function setActionButtons(row, status, taskId) {
         return;
     }
 
-    if (status === 'stopped' || status === 'stopping' || status === 'error') {
+    if (status === 'stopped' || status === 'retryable_error') {
         const resumeBtn = document.createElement('button');
         resumeBtn.className = 'btn btn-primary btn-sm resume-btn mr-1';
         resumeBtn.innerText = '재개';
@@ -324,10 +333,7 @@ function updateTaskRow(task) {
     const progress = task.progress || 0;
     const status = task.status || '';
 
-    let statusText = status;
-    if (status === 'waiting') {
-        statusText = 'waiting';
-    }
+    let statusText = TASK_STATUS_LABELS[status] || status;
     if (task.error) {
         statusText += `: ${task.error}`;
     }

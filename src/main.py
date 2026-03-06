@@ -33,8 +33,8 @@ class Status(str, Enum):
     waiting = "waiting"
     running = "running"
     completed = "completed"
-    failed = "failed"
-    error = "error"
+    fatal_error = "fatal_error"
+    retryable_error = "retryable_error"
     stopping = "stopping"
     stopped = "stopped"
 
@@ -196,7 +196,7 @@ def load_tasks():
                             tasks[tid] = data
                         elif isinstance(data, dict):
                             data.pop('messages', None)
-                            data['status'] = Status(data.get('status', Status.failed))
+                            data['status'] = Status(data.get('status', Status.fatal_error))
                             tasks[tid] = Task(**data)
                         else:
                             tasks[tid] = Task(**{})
@@ -537,13 +537,13 @@ async def run_ocr_task(
     try:
         if not await is_vllm_health():
             if not current_settings.docker_enabled:
-                task.status = Status.failed
+                task.status = Status.fatal_error
                 task.error = "vLLM 서버에 연결할 수 없습니다. Docker 자동 제어를 사용하지 않는 경우 서버를 먼저 실행해주세요."
                 await broadcast_update(task)
                 return
 
             if docker_manager is None:
-                task.status = Status.failed
+                task.status = Status.fatal_error
                 task.error = "Docker 자동 제어가 활성화되어 있지만 DockerManager를 초기화하지 못했습니다."
                 await broadcast_update(task)
                 return
@@ -553,13 +553,13 @@ async def run_ocr_task(
                 docker_manager.start_container(docker_name)
             except (APIError, DockerException) as e:
                 error_detail = getattr(e, "explanation", None) or str(e)
-                task.status = Status.failed
+                task.status = Status.fatal_error
                 task.error = f"Docker 컨테이너 시작 실패: {error_detail}"
                 await broadcast_update(task)
                 print(f"Docker 컨테이너 시작 실패: {error_detail}")
                 return
             except Exception as e:
-                task.status = Status.failed
+                task.status = Status.fatal_error
                 task.error = f"컨테이너 시작 중 알 수 없는 오류: {e}"
                 await broadcast_update(task)
                 print("컨테이너 시작 중 알 수 없는 오류:", e)
@@ -611,13 +611,13 @@ async def run_ocr_task(
         })
         await broadcast_update(task)
     except OcrProcessingError as e:
-        task.status = Status.error
+        task.status = Status.retryable_error
         task.error = str(e)
         print("OCR 프레임 처리 중 오류:", e)
         traceback.print_exc()
         await broadcast_update(task)
     except Exception as e:
-        task.status = Status.failed
+        task.status = Status.fatal_error
         task.error = str(e)
         print("OCR 작업 오류:", e)
         traceback.print_exc()
@@ -701,7 +701,7 @@ async def resume_ocr(task_id: str = Form(...)):
         raise HTTPException(status_code=404, detail="Task not found")
 
     task = tasks[task_id]
-    if task.status not in (Status.error, Status.stopped):
+    if task.status not in (Status.retryable_error, Status.stopped):
         raise HTTPException(status_code=400, detail="Task is not resumable")
     task.status = Status.waiting
     task.task_start_time = None
