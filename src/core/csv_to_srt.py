@@ -1,4 +1,4 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 import sys
 import argparse
@@ -14,6 +14,7 @@ from typing import Iterable, List, Optional
 _WS_RE = re.compile(r"\s+")
 
 
+# OCR CSV 한 줄을 내부 처리용 구조체로 보관
 @dataclass
 class Row:
     frame_number: int
@@ -21,6 +22,7 @@ class Row:
     text: str
 
 
+# SRT 한 구간을 나타내는 구조체
 @dataclass
 class Segment:
     index: int
@@ -29,7 +31,7 @@ class Segment:
     text: str
 
 
-# 공백·개행·탭 등을 하나의 공백으로 줄여 주는 헬퍼
+# 공백, 개행, 탭 등을 하나의 공백으로 줄여 주는 헬퍼
 def normalize_text(text: str) -> str:
     """Strip and collapse whitespace."""
     if not text:
@@ -38,6 +40,7 @@ def normalize_text(text: str) -> str:
     return _WS_RE.sub(" ", text)
 
 
+# 비교 전에 유니코드, 대소문자, 기호 차이를 줄여 문자열을 정규화
 def _strip_punct_lower_nfkc(text: str) -> str:
     if not text:
         return ""
@@ -118,6 +121,7 @@ def are_similar(
     letters_b = norm_b.replace(" ", "")
     avg_len = (len(letters_a) + len(letters_b)) / 2 if (letters_a or letters_b) else 0.0
 
+    # 짧은 자막은 글자 하나 차이에도 민감하므로 길이에 따라 임계값을 조정
     def adjusted_threshold(base: float, avg: float) -> float:
         if avg <= 3:
             return min(base, 0.72)
@@ -138,6 +142,7 @@ def are_similar(
     if tj and cs >= max(char_target - 0.08, 0.7) and tj >= token_thresh:
         return True
 
+    # 반복 모음, 의성어처럼 문자 구성만 비슷한 경우도 한 번 더 잡아줌
     sig_a = _letter_signature(norm_a)
     sig_b = _letter_signature(norm_b)
     if sig_a and sig_b:
@@ -170,6 +175,7 @@ def parse_csv(path: Path) -> List[Row]:
     with path.open("r", encoding="utf-8-sig", newline="") as handle:
         reader = csv.DictReader(handle)
         for idx, record in enumerate(reader):
+            # CSV 컬럼명이 조금 달라도 최대한 흡수해서 읽음
             try:
                 frame = int(
                     record.get("frame_number")
@@ -195,6 +201,7 @@ def parse_csv(path: Path) -> List[Row]:
 
 
 def estimate_frame_step(times: List[float]) -> float:
+    # 프레임 간격의 중앙값을 사용해 자막 종료 시점을 안정적으로 추정
     deltas = [b - a for a, b in zip(times, times[1:]) if b > a]
     if not deltas:
         return 0.04
@@ -215,102 +222,28 @@ def to_srt_timestamp(seconds: float) -> str:
     return f"{h:02d}:{m:02d}:{s:02d},{ms:03d}"
 
 
-
-
-
 def merge_same_text_segments(
     segments: List[Segment],
     *,
     gap: float,
-    char_thresh: float = 0.94,
-    token_thresh: float = 0.75,
 ) -> List[Segment]:
     if not segments:
         return []
-
+    # 정규화 결과가 같은 자막은 최대 1초 간격까지 다시 합침
+    normalized_merge_gap = max(gap, 1.0)
     merged: List[Segment] = [segments[0]]
     for seg in segments[1:]:
         prev = merged[-1]
         gap_len = max(0.0, seg.start - prev.end)
-
-        norm_prev = _strip_punct_lower_nfkc(prev.text).replace(" ", "")
-        norm_curr = _strip_punct_lower_nfkc(seg.text).replace(" ", "")
-        short_subset = (
-            bool(norm_prev)
-            and bool(norm_curr)
-            and len(norm_prev) >= 5
-            and len(norm_curr) <= 3
-            and set(norm_curr) <= set(norm_prev)
-        )
-        cs = char_similarity(prev.text, seg.text)
-        small_len = len(norm_prev) <= 12 and len(norm_curr) <= 12
-        unique_chars = set(norm_prev + norm_curr)
-
-        if seg.text == prev.text:
-            prev_len = prev.end - prev.start
-            seg_len = seg.end - seg.start
-            max_len = max(prev_len, seg_len)
-            if prev_len <= 2.0 and seg_len <= 2.0:
-                allowed_gap = max(gap, 1.3)
-            elif max_len >= 4.0 or len(norm_prev) >= 12:
-                allowed_gap = max(gap, 1.6)
-            else:
-                allowed_gap = max(gap, 1.0)
-        elif short_subset:
-            allowed_gap = max(gap, 1.4)
-        elif small_len and cs >= max(char_thresh - 0.06, 0.88):
-            allowed_gap = max(gap, 1.0)
-        elif len(unique_chars) <= 7 and cs >= max(char_thresh - 0.24, 0.70):
-            allowed_gap = max(gap, 1.0)
-        else:
-            allowed_gap = gap
-
-        if gap_len > allowed_gap:
-            merged.append(seg)
-            continue
-
-        if seg.text == prev.text or short_subset:
-            should_merge = True
-        elif small_len and cs >= max(char_thresh - 0.06, 0.88):
-            should_merge = True
-        elif len(unique_chars) <= 7 and cs >= max(char_thresh - 0.24, 0.70):
-            should_merge = True
-        else:
-            if cs >= char_thresh:
-                should_merge = True
-            elif cs >= max(char_thresh - 0.02, 0.85) and token_jaccard(prev.text, seg.text) >= token_thresh:
-                should_merge = True
-            else:
-                should_merge = False
-
-        if should_merge:
+        norm_prev = _strip_punct_lower_nfkc(prev.text)
+        norm_curr = _strip_punct_lower_nfkc(seg.text)
+        if norm_prev and norm_prev == norm_curr and gap_len <= normalized_merge_gap:
             if len(seg.text) > len(prev.text):
                 prev.text = seg.text
             prev.end = max(prev.end, seg.end)
         else:
             merged.append(seg)
-
-    def _squash_moan_runs(items: List[Segment]) -> List[Segment]:
-        if not items:
-            return []
-        squashed: List[Segment] = [items[0]]
-        for seg in items[1:]:
-            prev = squashed[-1]
-            norm_prev_local = _strip_punct_lower_nfkc(prev.text).replace(" ", "")
-            norm_curr_local = _strip_punct_lower_nfkc(seg.text).replace(" ", "")
-            if norm_prev_local and norm_curr_local:
-                unique_local = set(norm_prev_local + norm_curr_local)
-                gap_local = max(0.0, seg.start - prev.end)
-                if len(unique_local) <= 7 and gap_local <= max(gap, 1.8):
-                    if len(norm_curr_local) > len(norm_prev_local):
-                        prev.text = seg.text
-                    prev.end = max(prev.end, seg.end)
-                    continue
-            squashed.append(seg)
-        return squashed
-
-    return _squash_moan_runs(merged)
-
+    return merged
 
 def build_segments(
     rows: List[Row],
@@ -321,9 +254,7 @@ def build_segments(
     char_thresh: float = 0.88,
     token_thresh: float = 0.60,
     similar_gap: Optional[float] = None,
-    same_text_gap: float = 0.6,
-    same_text_char_thresh: float = 0.94,
-    same_text_token_thresh: float = 0.75,
+    same_text_gap: float = 1.0,
 ) -> List[Segment]:
     if not rows:
         return []
@@ -338,12 +269,14 @@ def build_segments(
     current_counts: dict[str, int] = {}
     current_last_seen: dict[str, float] = {}
 
+    # 현재 누적 중인 자막 구간을 대표 텍스트 하나로 확정해 저장
     def flush(next_time: Optional[float] = None) -> None:
         nonlocal current_text, current_start, current_last_time, current_counts, current_last_seen
         if current_text is None:
             return
         end_time = current_last_time + dt
         if next_time is not None:
+            # 다음 자막 시작 직전까지만 잘라 겹침을 방지
             end_time = min(end_time, max(current_start, next_time - overlap_guard))
         if current_counts:
             max_count = max(current_counts.values())
@@ -416,11 +349,10 @@ def build_segments(
 
     flush(next_time=None)
 
+    # 1차 구간화 후에도 정규화 결과가 같은 자막은 1초 이내에서 다시 합침
     segments = merge_same_text_segments(
         segments,
         gap=same_text_gap,
-        char_thresh=same_text_char_thresh,
-        token_thresh=same_text_token_thresh,
     )
 
     for idx, seg in enumerate(segments, start=1):
@@ -452,10 +384,9 @@ def convert_csv_to_srt(
     char_thresh: float = 0.88,
     token_thresh: float = 0.60,
     similar_gap: Optional[float] = None,
-    same_text_gap: float = 0.6,
-    same_text_char_thresh: float = 0.94,
-    same_text_token_thresh: float = 0.75,
+    same_text_gap: float = 1.0,
 ) -> Path:
+    # CSV 파싱 -> 구간 병합 -> SRT 저장 순서로 변환 수행
     rows = parse_csv(in_csv)
     segments = build_segments(
         rows,
@@ -466,8 +397,6 @@ def convert_csv_to_srt(
         token_thresh=token_thresh,
         similar_gap=similar_gap,
         same_text_gap=same_text_gap,
-        same_text_char_thresh=same_text_char_thresh,
-        same_text_token_thresh=same_text_token_thresh,
     )
     if out_srt is None:
         out_srt = in_csv.with_suffix(".srt")
