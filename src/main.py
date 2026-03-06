@@ -35,8 +35,8 @@ class Status(str, Enum):
     completed = "completed"
     failed = "failed"
     error = "error"
-    cancelling = "cancelling"
-    cancelled = "cancelled"
+    stopping = "stopping"
+    stopped = "stopped"
 
 @dataclass
 class Task:
@@ -151,10 +151,20 @@ PICKLE_FILENAME = 'tasks.pkl'
 tasks: Dict[str, Task] = {}
 
 
+def normalize_task_status(status: Status | str) -> Status:
+    if status in (Status.waiting, Status.running, Status.completed, Status.failed, Status.error, Status.stopping, Status.stopped):
+        return Status(status)
+    if status == "cancelling":
+        return Status.stopping
+    if status == "cancelled":
+        return Status.stopped
+    return Status.failed
+
+
 def get_active_task_id_by_video_filename(video_filename: str) -> Optional[str]:
     """같은 비디오 경로로 실행/대기 중인 작업 ID를 반환합니다."""
     target_video_path = os.path.abspath(os.path.join(UPLOAD_DIR, video_filename))
-    active_statuses = {Status.waiting, Status.running, Status.cancelling}
+    active_statuses = {Status.waiting, Status.running, Status.stopping}
     for task_id, task in tasks.items():
         if task.status not in active_statuses:
             continue
@@ -193,9 +203,11 @@ def load_tasks():
                     tasks = {}
                     for tid, data in loaded.items():
                         if isinstance(data, Task):
+                            data.status = normalize_task_status(data.status)
                             tasks[tid] = data
                         elif isinstance(data, dict):
                             data.pop('messages', None)
+                            data['status'] = normalize_task_status(data.get('status', Status.failed))
                             tasks[tid] = Task(**data)
                         else:
                             tasks[tid] = Task(**{})
@@ -208,10 +220,11 @@ def load_tasks():
     else:
         tasks = {}
     
-    # 로드된 테스크 정보에서 실행 중이던 상태를 모두 cancelled 로 변경
+    # 로드된 테스크 정보에서 실행 중이던 상태를 모두 stopped 로 변경
     for t in tasks.values():
-        if t.status in (Status.running, Status.cancelling, Status.waiting):
-            t.status = Status.cancelled
+        t.status = normalize_task_status(t.status)
+        if t.status in (Status.running, Status.stopping, Status.waiting):
+            t.status = Status.stopped
 
 def save_tasks():
     try:
@@ -586,9 +599,9 @@ async def run_ocr_task(
             mask_width=mask_width,
             mask_height=mask_height,
         ):
-            # Check if cancellation was requested.
-            if task.status == Status.cancelling:
-                task.status = Status.cancelled
+            # 중지 요청이 들어오면 현재 진행 중인 OCR 을 중단합니다.
+            if task.status == Status.stopping:
+                task.status = Status.stopped
                 await broadcast_update(task)
                 return  # 작업 중단
 
@@ -661,20 +674,37 @@ async def start_next_task():
     )
 
 
-@app.post("/cancel_ocr/")
-async def cancel_ocr(task_id: str = Form(...)):
+@app.post("/stop_ocr/")
+async def stop_ocr(task_id: str = Form(...)):
     if task_id in tasks:
         task = tasks[task_id]
         if task.status == Status.waiting:
-            task.status = Status.cancelled
+            task.status = Status.stopped
             await broadcast_update(task)
             await start_next_task()
-            return {"detail": f"Task {task_id} 취소되었습니다."}
-        task.status = Status.cancelling
+            return {"detail": f"Task {task_id} 중지되었습니다."}
+        task.status = Status.stopping
         await broadcast_update(task)
-        return {"detail": f"Task {task_id} 취소 요청이 접수되었습니다."}
+        return {"detail": f"Task {task_id} 중지 요청이 접수되었습니다."}
     else:
         raise HTTPException(status_code=404, detail="Task not found")
+
+
+@app.post("/stop_all_ocr/")
+async def stop_all_ocr():
+    stopped_task_ids = []
+
+    for task in tasks.values():
+        if task.status == Status.waiting:
+            task.status = Status.stopped
+            stopped_task_ids.append(task.task_id)
+            await broadcast_update(task)
+        elif task.status == Status.running:
+            task.status = Status.stopping
+            stopped_task_ids.append(task.task_id)
+            await broadcast_update(task)
+
+    return {"detail": f"{len(stopped_task_ids)}개 작업의 중지 요청이 접수되었습니다."}
 
 
 @app.post("/resume_ocr/")
@@ -683,9 +713,7 @@ async def resume_ocr(task_id: str = Form(...)):
         raise HTTPException(status_code=404, detail="Task not found")
 
     task = tasks[task_id]
-    if task.status == Status.cancelled:
-        raise HTTPException(status_code=400, detail="RESUME_NOT_READY")
-    if task.status not in (Status.error,):
+    if task.status not in (Status.error, Status.stopped):
         raise HTTPException(status_code=400, detail="Task is not resumable")
     task.status = Status.waiting
     task.task_start_time = None

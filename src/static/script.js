@@ -10,6 +10,7 @@ const taskListView = document.getElementById('task-list-view');
 const ocrCreationView = document.getElementById('ocr-creation-view');
 const taskListTableBody = document.querySelector('#task-list tbody');
 const videoContainer = document.getElementById('video-container');
+const stopAllBtn = document.getElementById('stop-all-btn');
 
 const newOcrBtn = document.getElementById('new-ocr-btn');
 const backToListBtn = document.getElementById('back-to-list-btn');
@@ -287,15 +288,15 @@ function setActionButtons(row, status, taskId) {
     cell.innerHTML = '';
 
     if (status === 'running' || status === 'waiting') {
-        const cancelBtn = document.createElement('button');
-        cancelBtn.className = 'btn btn-warning btn-sm cancel-btn';
-        cancelBtn.innerText = '중지';
-        cancelBtn.onclick = () => cancelTask(taskId);
-        cell.appendChild(cancelBtn);
+        const stopBtn = document.createElement('button');
+        stopBtn.className = 'btn btn-warning btn-sm stop-btn';
+        stopBtn.innerText = '중지';
+        stopBtn.onclick = () => stopTask(taskId);
+        cell.appendChild(stopBtn);
         return;
     }
 
-    if (status === 'cancelled' || status === 'cancelling' || status === 'error') {
+    if (status === 'stopped' || status === 'stopping' || status === 'error') {
         const resumeBtn = document.createElement('button');
         resumeBtn.className = 'btn btn-primary btn-sm resume-btn mr-1';
         resumeBtn.innerText = '재개';
@@ -367,11 +368,11 @@ function updateTaskRow(task) {
     updateRunningStatus(taskId, status);
 }
 
-function cancelTask(taskId) {
+function stopTask(taskId) {
     const formData = new FormData();
     formData.append('task_id', taskId);
 
-    fetch('/cancel_ocr/', {
+    fetch('/stop_ocr/', {
         method: 'POST',
         body: formData,
     })
@@ -396,6 +397,22 @@ function resumeTask(taskId) {
                 } else {
                     alert(`OCR resume failed: ${data.detail}`);
                 }
+                return;
+            }
+
+            console.log(data.detail);
+        })
+        .catch((err) => console.error(err));
+}
+
+function stopAllTasks() {
+    fetch('/stop_all_ocr/', {
+        method: 'POST',
+    })
+        .then(async (response) => {
+            const data = await response.json();
+            if (!response.ok) {
+                alert(`전체 중지 실패: ${data.detail}`);
                 return;
             }
 
@@ -448,6 +465,10 @@ newOcrBtn.addEventListener('click', () => {
 // 이벤트: "작업 큐로 돌아가기" 버튼 -> 작업 목록 뷰로 전환
 backToListBtn.addEventListener('click', () => {
     switchToTaskListView();
+});
+
+stopAllBtn.addEventListener('click', () => {
+    stopAllTasks();
 });
 
 // 이벤트: 전체 화면 OCR 토글 변경
