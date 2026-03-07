@@ -57,6 +57,7 @@ def _strip_punct_lower_nfkc(text: str) -> str:
     return collapsed
 
 
+# 연속으로 반복되는 문자를 줄여 비교용 문자 시그니처를 생성
 def _letter_signature(normalized: str) -> str:
     if not normalized:
         return ""
@@ -72,11 +73,13 @@ def _letter_signature(normalized: str) -> str:
     return "".join(signature)
 
 
+# 정규화된 문자열을 단어 집합으로 변환
 def token_set(text: str) -> set[str]:
     normalized = _strip_punct_lower_nfkc(text)
     return set(normalized.split()) if normalized else set()
 
 
+# 정규화된 두 문자열의 문자 단위 유사도를 계산
 def char_similarity(a: str, b: str) -> float:
     from difflib import SequenceMatcher
 
@@ -87,6 +90,7 @@ def char_similarity(a: str, b: str) -> float:
     return SequenceMatcher(None, norm_a, norm_b, autojunk=False).ratio()
 
 
+# 두 문자열의 단어 집합 겹침 정도를 자카드 계수로 계산
 def token_jaccard(a: str, b: str) -> float:
     aset = token_set(a)
     bset = token_set(b)
@@ -99,6 +103,7 @@ def token_jaccard(a: str, b: str) -> float:
     return inter / union if union else 0.0
 
 
+# 문자, 단어, 반복 패턴 기준을 조합해 두 자막이 같은지 판단
 def are_similar(
     a: str,
     b: str,
@@ -170,6 +175,7 @@ def are_similar(
     return False
 
 
+# OCR CSV를 읽어 시간순 Row 목록으로 정리
 def parse_csv(path: Path) -> List[Row]:
     rows: List[Row] = []
     with path.open("r", encoding="utf-8-sig", newline="") as handle:
@@ -200,6 +206,7 @@ def parse_csv(path: Path) -> List[Row]:
     return rows
 
 
+# 프레임 간격의 대표값을 계산해 자막 종료 보정에 사용
 def estimate_frame_step(times: List[float]) -> float:
     # 프레임 간격의 중앙값을 사용해 자막 종료 시점을 안정적으로 추정
     deltas = [b - a for a, b in zip(times, times[1:]) if b > a]
@@ -209,6 +216,7 @@ def estimate_frame_step(times: List[float]) -> float:
     return max(0.01, min(dt, 0.2))
 
 
+# 초 단위 시간을 SRT 타임스탬프 문자열로 변환
 def to_srt_timestamp(seconds: float) -> str:
     if seconds < 0:
         seconds = 0.0
@@ -222,6 +230,7 @@ def to_srt_timestamp(seconds: float) -> str:
     return f"{h:02d}:{m:02d}:{s:02d},{ms:03d}"
 
 
+# 같은 자막으로 판단되는 인접 구간을 다시 병합
 def merge_same_text_segments(
     segments: List[Segment],
     *,
@@ -245,6 +254,8 @@ def merge_same_text_segments(
             merged.append(seg)
     return merged
 
+
+# OCR 행 목록을 시간 흐름에 따라 자막 구간으로 묶어 생성
 def build_segments(
     rows: List[Row],
     *,
@@ -360,6 +371,7 @@ def build_segments(
     return segments
 
 
+# 완성된 자막 구간 목록을 SRT 파일로 기록
 def write_srt(segments: Iterable[Segment], out_path: Path) -> None:
     with out_path.open("w", encoding="utf-8", newline="\n") as handle:
         first = True
@@ -374,6 +386,7 @@ def write_srt(segments: Iterable[Segment], out_path: Path) -> None:
             handle.write(f"{seg.text}\n")
 
 
+# CSV 입력을 읽어 SRT 파일로 변환하는 진입 함수
 def convert_csv_to_srt(
     in_csv: Path,
     out_srt: Optional[Path] = None,
@@ -404,6 +417,7 @@ def convert_csv_to_srt(
     return out_srt
 
 
+# 명령행 인자를 받아 CSV -> SRT 변환을 실행
 def main():
     parser = argparse.ArgumentParser(
         description=(
