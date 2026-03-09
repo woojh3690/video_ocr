@@ -79,11 +79,6 @@ class SettingsManager:
         with self._lock:
             return self._settings.model_copy(deep=True)
 
-    def reload(self) -> AppSettings:
-        with self._lock:
-            self._settings = self._load_from_disk()
-            return self._settings
-
     def update(self, **updates) -> AppSettings:
         with self._lock:
             data = self._settings.model_dump()
