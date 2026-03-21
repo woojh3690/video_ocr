@@ -146,8 +146,13 @@ def frame_batch_generator(
         if subtitle_color_enabled and subtitle_color_ranges:
             working_frame = apply_subtitle_color_filter(working_frame, subtitle_color_ranges)
 
-        rgb_frame = cv2.cvtColor(working_frame, cv2.COLOR_BGR2RGB)
-        success, buffer = cv2.imencode('.jpg', rgb_frame)
+        success, buffer = cv2.imencode(
+            ".jpg",
+            working_frame,
+            [cv2.IMWRITE_JPEG_QUALITY, 95],
+        )
+        if not success:
+            raise ValueError(f"Failed to encode frame {frame_number} as JPEG.")
         img_base64 = base64.b64encode(buffer).decode("utf-8")
 
         yield [frame_number, img_base64]
@@ -193,7 +198,7 @@ async def process_ocr(
     def write_json(fn: int, items: list[SpottingItem]):
         ocr_res_dict = {
             "frame_number": fn,
-            "time": round(frame_number / frame_rate, 3),
+            "time": round(fn / frame_rate, 3),
             "spotting_items": [item.to_dict() for item in items],
         }
         line = json.dumps(ocr_res_dict, ensure_ascii=False) + "\n"

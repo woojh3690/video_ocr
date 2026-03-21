@@ -1,7 +1,7 @@
 import re
 
 from dataclasses import dataclass, asdict
-from typing import List, Tuple
+from typing import Any, List, Optional, Tuple
 from pydantic import ValidationError
 
 from openai import AsyncOpenAI, LengthFinishReasonError
@@ -64,20 +64,35 @@ class PaddleClient:
             "table": "Table Recognition:",
             "formula": "Formula Recognition:",
             "chart": "Chart Recognition:",
-            "spotting": "Spotting:",
+            "spotting": "检测并识别图片中的文字，将文本坐标格式化输出。",
             "seal": "Seal Recognition:",
         }
         self._loc_re = re.compile(r"<\|LOC_(\d+)\|>")
+        self._coord_pair_re = re.compile(
+            r"\(\s*(\d+)\s*,\s*(\d+)\s*\)\s*,\s*\(\s*(\d+)\s*,\s*(\d+)\s*\)"
+        )
+        self._spotting_line_re = re.compile(
+            r"^\s*(?P<text>.+?)\s*(?P<coords>\(\s*\d+\s*,\s*\d+\s*\)\s*,\s*\(\s*\d+\s*,\s*\d+\s*\))\s*$"
+        )
+        self._full_width_translation = str.maketrans({
+            "（": "(",
+            "）": ")",
+            "，": ",",
+        })
 
-    async def predict(self, frame_idx, base64_img, task="spotting") -> List[SpottingItem]:
+    async def predict(self, frame_idx, base64_img, task="spotting") -> tuple[int, List[SpottingItem]]:
         messages = [
+            {
+                "role": "system",
+                "content": "",
+            },
             {
                 "role": "user",
                 "content": [
                     {
                         "type": "image_url",
                         "image_url": {
-                            "url": f"data:image/png;base64,{base64_img}"
+                            "url": f"data:image/jpeg;base64,{base64_img}"
                         }
                     },
                     {
@@ -94,14 +109,19 @@ class PaddleClient:
                 model=self.model,
                 messages=messages,
                 temperature=0.0,
-                max_tokens=256,
+                top_p=0.95,
+                seed=1234,
+                stream=False,
+                max_tokens=16384,
+                extra_body={
+                    "top_k": 1,
+                    "repetition_penalty": 1.0,
+                },
             )
-            content = response.choices[0].message.content
+            content = self.extract_response_text(response.choices[0].message.content)
+            content = self.clean_repeated_substrings(content)
             if content != "":
-                for line in content.split("\n"):
-                    item = self.parse_spotting_line(line)
-                    if isinstance(item, SpottingItem):
-                        spotting_list.append(item)
+                spotting_list = self.parse_spotting_response(content)
             spotting_list = self.dedup_spotting_items(spotting_list)
         except (ValidationError, LengthFinishReasonError) as e:
             # 예외가 발생해도 그냥 빈 문자열로 치환하고 로그만 남긴다
@@ -114,7 +134,114 @@ class PaddleClient:
         
         return frame_idx, spotting_list
 
-    def parse_spotting_line(self, line: str) -> SpottingItem:
+    def extract_response_text(self, content: Any) -> str:
+        if isinstance(content, str):
+            return content
+
+        if isinstance(content, list):
+            parts: list[str] = []
+            for item in content:
+                if isinstance(item, str):
+                    parts.append(item)
+                    continue
+                if isinstance(item, dict):
+                    text = item.get("text") or item.get("content") or ""
+                    if isinstance(text, str):
+                        parts.append(text)
+            return "".join(parts)
+
+        return ""
+
+    def clean_repeated_substrings(self, text: str) -> str:
+        length = len(text)
+        if length < 8000:
+            return text
+
+        for repeat_length in range(2, length // 10 + 1):
+            candidate = text[-repeat_length:]
+            repeat_count = 0
+            index = length - repeat_length
+
+            while index >= 0 and text[index:index + repeat_length] == candidate:
+                repeat_count += 1
+                index -= repeat_length
+
+            if repeat_count >= 10:
+                return text[:length - repeat_length * (repeat_count - 1)]
+
+        return text
+
+    def normalize_spotting_response(self, response: str) -> str:
+        normalized = response.translate(self._full_width_translation)
+        normalized = normalized.replace("\r\n", "\n").replace("\r", "\n")
+        normalized = normalized.replace("```text", "").replace("```json", "").replace("```", "")
+        return normalized.strip()
+
+    def parse_spotting_response(self, response: str) -> List[SpottingItem]:
+        normalized = self.normalize_spotting_response(response)
+        spotting_list: list[SpottingItem] = []
+        coord_matches = list(self._coord_pair_re.finditer(normalized))
+
+        for line in normalized.split("\n"):
+            item = self.parse_spotting_bbox_line(line)
+            if item is not None:
+                spotting_list.append(item)
+
+        if spotting_list and len(spotting_list) == len(coord_matches):
+            return spotting_list
+
+        cursor = 0
+        spotting_list = []
+        for match in coord_matches:
+            text = normalized[cursor:match.start()].split("\n")[-1].strip()
+            item = self.build_spotting_item(text, match.groups())
+            if item is not None:
+                spotting_list.append(item)
+            cursor = match.end()
+
+        if spotting_list:
+            return spotting_list
+
+        for line in normalized.split("\n"):
+            item = self.parse_spotting_line(line)
+            if item is not None:
+                spotting_list.append(item)
+
+        return spotting_list
+
+    def parse_spotting_bbox_line(self, line: str) -> Optional[SpottingItem]:
+        match = self._spotting_line_re.fullmatch(line)
+        if match is None:
+            return None
+
+        coord_match = self._coord_pair_re.fullmatch(match.group("coords"))
+        if coord_match is None:
+            return None
+
+        return self.build_spotting_item(match.group("text"), coord_match.groups())
+
+    def build_spotting_item(self, text: str, coords: tuple[str, str, str, str]) -> Optional[SpottingItem]:
+        cleaned_text = re.sub(r"</?(?:ref|box|quad)>", "", text, flags=re.IGNORECASE)
+        cleaned_text = cleaned_text.strip().strip("`")
+        if not cleaned_text:
+            return None
+
+        x1, y1, x2, y2 = (self.clip_normalized_coord(value) for value in coords)
+        left, right = sorted((x1, x2))
+        top, bottom = sorted((y1, y2))
+        quad = (
+            (left, top),
+            (right, top),
+            (right, bottom),
+            (left, bottom),
+        )
+        return SpottingItem(text=cleaned_text, quad=quad)
+
+    def clip_normalized_coord(self, value: str | int) -> int:
+        coord = int(value)
+        return max(0, min(coord, 1000))
+
+    def parse_spotting_line(self, line: str) -> Optional[SpottingItem]:
         """
         한 줄(텍스트 + 8개 LOC 토큰)을 SpottingItem(dataclass)로 파싱.
 
@@ -124,7 +251,7 @@ class PaddleClient:
         """
         locs = list(map(int, self._loc_re.findall(line)))
         if len(locs) != 8:
-            return False
+            return None
 
         text = self._loc_re.split(line, maxsplit=1)[0].rstrip("\n\r")
 
