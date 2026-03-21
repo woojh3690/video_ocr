@@ -53,9 +53,27 @@ const TASK_STATUS_LABELS = {
 };
 
 // WebSocket 연결 (단일 연결)
-const ws = new WebSocket(`ws://${location.host}/ws/tasks`);
+let wsReconnectTimer = null;
+let wsHeartbeatTimer = null;
+const WS_RECONNECT_DELAY_MS = 3000;
+const WS_HEARTBEAT_INTERVAL_MS = 25000;
+const wsProtocol = location.protocol === 'https:' ? 'wss://' : 'ws://';
+const ws = new WebSocket(`${wsProtocol}${location.host}/ws/tasks`);
 
 ws.onopen = () => {
+    if (wsReconnectTimer) {
+        clearTimeout(wsReconnectTimer);
+        wsReconnectTimer = null;
+    }
+    if (wsHeartbeatTimer) {
+        clearInterval(wsHeartbeatTimer);
+    }
+    wsHeartbeatTimer = setInterval(() => {
+        if (ws.readyState === WebSocket.OPEN) {
+            ws.send('ping');
+        }
+    }, WS_HEARTBEAT_INTERVAL_MS);
+    loadTaskList();
     console.log("WebSocket 연결 성공");
 };
 
@@ -70,6 +88,24 @@ ws.onerror = (err) => {
 };
 
 // 작업 목록 초기 로드
+ws.onclose = () => {
+    if (wsHeartbeatTimer) {
+        clearInterval(wsHeartbeatTimer);
+        wsHeartbeatTimer = null;
+    }
+    if (!wsReconnectTimer) {
+        wsReconnectTimer = setTimeout(() => {
+            location.reload();
+        }, WS_RECONNECT_DELAY_MS);
+    }
+};
+
+document.addEventListener('visibilitychange', () => {
+    if (!document.hidden && ws.readyState === WebSocket.CLOSED && !wsReconnectTimer) {
+        location.reload();
+    }
+});
+
 function loadTaskList() {
     return fetch('/tasks/')
         .then((response) => response.json())

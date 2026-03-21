@@ -664,18 +664,25 @@ async def start_next_task():
 
 @app.post("/stop_ocr/")
 async def stop_ocr(task_id: str = Form(...)):
-    if task_id in tasks:
-        task = tasks[task_id]
-        if task.status == Status.waiting:
-            task.status = Status.stopped
-            await broadcast_update(task)
-            await start_next_task()
-            return {"detail": f"Task {task_id} 중지되었습니다."}
+    if task_id not in tasks:
+        raise HTTPException(status_code=404, detail="Task not found")
+    task = tasks[task_id]
+    if task.status == Status.stopping:
+        return {"detail": f"Task {task_id} 는 이미 중지 요청이 접수된 상태입니다."}
+    if task.status == Status.stopped:
+        return {"detail": f"Task {task_id} 는 이미 중지된 상태입니다."}
+    if task.status not in (Status.waiting, Status.running):
+        return {"detail": f"Task {task_id} 는 이 상태에서 중지될 수 없습니다. '{task.status.value}'"}
+
+    if task.status == Status.waiting:
+        task.status = Status.stopped
+        await broadcast_update(task)
+        await start_next_task()
+        return {"detail": f"Task {task_id} 중지되었습니다."}
+    else:
         task.status = Status.stopping
         await broadcast_update(task)
         return {"detail": f"Task {task_id} 중지 요청이 접수되었습니다."}
-    else:
-        raise HTTPException(status_code=404, detail="Task not found")
 
 
 @app.post("/stop_all_ocr/")
