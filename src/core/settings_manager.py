@@ -13,9 +13,21 @@ DEFAULT_SETTINGS = {
     "kafka_enabled": False,
     "kafka_url": "192.168.0.2:19092",
     "llm_base_url": None,
-    "llm_model": "gpt-5-nano",
+    "llm_model": "tencent/HunyuanOCR",
     "llm_api_key": None,
 }
+
+
+def normalize_llm_base_url(base_url: Optional[str]) -> Optional[str]:
+    if base_url is None:
+        return None
+
+    value = base_url.strip().rstrip("/")
+    if not value:
+        return None
+    if not value.endswith("/v1"):
+        value = f"{value}/v1"
+    return value
 
 
 class AppSettings(BaseModel):
@@ -38,6 +50,7 @@ class AppSettings(BaseModel):
         for key, value in data.items():
             if isinstance(value, str):
                 data[key] = value.strip()
+        data["llm_base_url"] = normalize_llm_base_url(data.get("llm_base_url"))
         return AppSettings(**data)
 
 

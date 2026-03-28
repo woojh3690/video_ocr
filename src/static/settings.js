@@ -152,6 +152,9 @@ document.addEventListener('DOMContentLoaded', () => {
         if (payload.docker_enabled && !payload.docker_name) {
             return 'Docker 자동 제어를 사용하려면 컨테이너 이름을 선택해주세요.';
         }
+        if (!payload.llm_base_url) {
+            return 'LLM Base URL을 입력해주세요.';
+        }
         if (!payload.llm_model) {
             return 'LLM 모델을 입력해주세요.';
         }

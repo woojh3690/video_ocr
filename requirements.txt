@@ -9,3 +9,4 @@ thefuzz
 langdetect
 docker
 kafka-python
+norfair
