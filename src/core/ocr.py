@@ -9,7 +9,7 @@ from typing import List, Generator
 import cv2
 import numpy as np
 
-from core.paddle_client import OcrProcessingError, SpottingItem, PaddleClient
+from core.hunyuan_client import OcrProcessingError, SpottingItem, HunyuanOCRClient
 from core.jsonl_to_srt import jsonl_to_srt
 from core.settings_manager import get_settings
 
@@ -155,7 +155,7 @@ def frame_batch_generator(
             raise ValueError(f"Failed to encode frame {frame_number} as JPEG.")
         img_base64 = base64.b64encode(buffer).decode("utf-8")
 
-        yield [frame_number, img_base64]
+        yield [frame_number, img_base64, int(working_frame.shape[1]), int(working_frame.shape[0])]
 
 async def process_ocr(
     video_filename,
@@ -210,7 +210,7 @@ async def process_ocr(
 
     # ollama 클라이언트 초기화
     settings = get_settings()
-    client = PaddleClient(base_url=settings.llm_base_url, model=settings.llm_model)
+    client = HunyuanOCRClient(base_url=settings.llm_base_url, model=settings.llm_model)
     
     running: set[asyncio.Task] = set()
 
@@ -221,7 +221,7 @@ async def process_ocr(
         heap: list[tuple[int, str]] = []
         next_frame_to_write = start_ocr_frame + 1
 
-        for frame_idx, img_b64 in frame_batch_generator(
+        for frame_idx, img_b64, image_width, image_height in frame_batch_generator(
             cap,
             x,
             y,
@@ -239,7 +239,7 @@ async def process_ocr(
             # 새 작업 추가
             running.add(
                 asyncio.create_task(
-                    client.predict(frame_idx, img_b64)
+                    client.predict(frame_idx, img_b64, image_width, image_height)
                 )
             )
 

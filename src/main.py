@@ -262,6 +262,16 @@ async def update_settings_api(payload: SettingsUpdateRequest):
         kafka_url_value = updates.get("kafka_url", current_settings.kafka_url)
         if not kafka_url_value or not kafka_url_value.strip():
             raise HTTPException(status_code=400, detail="Kafka URL을 입력해주세요.")
+    preview_settings = AppSettings(
+        **{
+            **current_settings.model_dump(),
+            **updates,
+        }
+    ).normalized()
+    if not preview_settings.llm_base_url:
+        raise HTTPException(status_code=400, detail="LLM Base URL을 입력해주세요.")
+    if not preview_settings.llm_model:
+        raise HTTPException(status_code=400, detail="LLM 모델명을 입력해주세요.")
     try:
         new_settings = settings_manager.update(**updates)
     except ValidationError as exc:
@@ -275,6 +285,8 @@ async def update_settings_api(payload: SettingsUpdateRequest):
 async def is_vllm_health():
     """Check if vllm server is reachable"""
     settings = current_settings
+    if not settings.llm_base_url:
+        return False
     client = openai.AsyncOpenAI(base_url=current_settings.llm_base_url, api_key="dummy_key")
     try:
         await client.models.list()
@@ -407,6 +419,11 @@ async def start_ocr_endpoint(
     subtitle_color_enabled: bool = Form(False),
     subtitle_color_ranges: Optional[str] = Form(None),
 ):
+    if not current_settings.llm_base_url:
+        raise HTTPException(status_code=400, detail="LLM Base URL 설정이 필요합니다.")
+    if not current_settings.llm_model:
+        raise HTTPException(status_code=400, detail="LLM 모델 설정이 필요합니다.")
+
     duplicate_task_id = get_active_task_id_by_video_filename(video_filename)
     if duplicate_task_id is not None:
         raise HTTPException(
@@ -534,6 +551,11 @@ async def run_ocr_task(
     task = tasks[task_id]
 
     try:
+        if not current_settings.llm_base_url:
+            raise RuntimeError("LLM Base URL 설정이 필요합니다.")
+        if not current_settings.llm_model:
+            raise RuntimeError("LLM 모델 설정이 필요합니다.")
+
         # Ensure the vLLM container is running; start it if needed.
         if not await is_vllm_health():
             print("vLLM 서버가 준비되지 않았습니다. 컨테이너를 시작합니다.")

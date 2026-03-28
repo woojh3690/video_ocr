@@ -16,6 +16,18 @@ DEFAULT_SETTINGS = {
 }
 
 
+def normalize_llm_base_url(base_url: Optional[str]) -> Optional[str]:
+    if base_url is None:
+        return None
+
+    value = base_url.strip().rstrip("/")
+    if not value:
+        return None
+    if not value.endswith("/v1"):
+        value = f"{value}/v1"
+    return value
+
+
 class AppSettings(BaseModel):
     docker_url: str = Field(default=DEFAULT_SETTINGS["docker_url"])
     docker_name: str = Field(default=DEFAULT_SETTINGS["docker_name"])
@@ -34,6 +46,7 @@ class AppSettings(BaseModel):
         for key, value in data.items():
             if isinstance(value, str):
                 data[key] = value.strip()
+        data["llm_base_url"] = normalize_llm_base_url(data.get("llm_base_url"))
         return AppSettings(**data)
 
 

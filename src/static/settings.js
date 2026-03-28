@@ -71,6 +71,9 @@ document.addEventListener('DOMContentLoaded', () => {
         if (!payload.docker_name) {
             return '컨테이너 이름을 입력해주세요.';
         }
+        if (!payload.llm_base_url) {
+            return 'LLM Base URL을 입력해주세요.';
+        }
         if (!payload.llm_model) {
             return 'LLM 모델을 입력해주세요.';
         }
