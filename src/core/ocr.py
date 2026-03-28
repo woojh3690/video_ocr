@@ -7,62 +7,12 @@ from heapq import heappush, heappop
 from typing import List, Generator
 
 import cv2
-import numpy as np
 
 from core.hunyuan_client import OcrProcessingError, SpottingItem, HunyuanOCRClient
 from core.jsonl_to_srt import jsonl_to_srt
 from core.settings_manager import get_settings
 
 UPLOAD_DIR = "uploads"
-
-
-def normalize_subtitle_color_rules(ranges: list[dict] | None) -> list[dict]:
-    if not ranges:
-        return []
-
-    normalized = []
-    for rule in ranges:
-        if not isinstance(rule, dict):
-            continue
-
-        try:
-            r = int(rule.get("r"))
-            g = int(rule.get("g"))
-            b = int(rule.get("b"))
-            tolerance = int(rule.get("tolerance", 20))
-        except (TypeError, ValueError):
-            continue
-
-        if not (0 <= r <= 255 and 0 <= g <= 255 and 0 <= b <= 255 and 0 <= tolerance <= 255):
-            continue
-
-        normalized.append({"r": r, "g": g, "b": b, "tolerance": tolerance})
-
-    return normalized
-
-
-def apply_subtitle_color_filter(frame_bgr: np.ndarray, rules: list[dict]) -> np.ndarray:
-    if frame_bgr.size == 0 or not rules:
-        return frame_bgr
-
-    frame_rgb = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2RGB)
-    arr_i16 = frame_rgb.astype(np.int16)
-    mask = np.zeros(frame_rgb.shape[:2], dtype=bool)
-
-    for rule in rules:
-        target = np.array([rule["r"], rule["g"], rule["b"]], dtype=np.int16).reshape(1, 1, 3)
-        tol = int(rule["tolerance"])
-        lower = target - tol
-        upper = target + tol
-        rule_mask = np.all((arr_i16 >= lower) & (arr_i16 <= upper), axis=2)
-        mask |= rule_mask
-
-    keep_white_background = any(max(rule["r"], rule["g"], rule["b"]) <= 70 for rule in rules)
-    fill_value = 255 if keep_white_background else 0
-    filtered_rgb = np.full_like(frame_rgb, fill_value, dtype=np.uint8)
-    filtered_rgb[mask] = frame_rgb[mask]
-
-    return cv2.cvtColor(filtered_rgb, cv2.COLOR_RGB2BGR)
 
 # 가장 마지막으로 OCR 처리된 프레임 번호를 반환
 def get_last_frame_number(jsonl_path: Path) -> int:
@@ -105,8 +55,6 @@ def frame_batch_generator(
     mask_y: int | None = None,
     mask_width: int | None = None,
     mask_height: int | None = None,
-    subtitle_color_enabled: bool = False,
-    subtitle_color_ranges: list[dict] | None = None,
 ) -> Generator[List, None, None]:
     has_mask = all(value is not None for value in (mask_x, mask_y, mask_width, mask_height))
     if has_mask and not full_screen_ocr:
@@ -143,9 +91,6 @@ def frame_batch_generator(
                 )
 
         # 이미지를 base64로 인코딩
-        if subtitle_color_enabled and subtitle_color_ranges:
-            working_frame = apply_subtitle_color_filter(working_frame, subtitle_color_ranges)
-
         success, buffer = cv2.imencode(
             ".jpg",
             working_frame,
@@ -167,14 +112,10 @@ async def process_ocr(
     mask_y=None,
     mask_width=None,
     mask_height=None,
-    subtitle_color_enabled=False,
-    subtitle_color_ranges=None,
 ):
     has_any_mask_value = any(value is not None for value in (mask_x, mask_y, mask_width, mask_height))
     if has_any_mask_value and not full_screen_ocr:
         raise ValueError("Mask is only supported when full_screen_ocr is enabled.")
-
-    normalized_subtitle_color_ranges = normalize_subtitle_color_rules(subtitle_color_ranges)
 
     # 파일 경로 정보 초기화
     UPLOAD_DIR = "uploads"
@@ -237,8 +178,6 @@ async def process_ocr(
             mask_y=mask_y,
             mask_width=mask_width,
             mask_height=mask_height,
-            subtitle_color_enabled=subtitle_color_enabled,
-            subtitle_color_ranges=normalized_subtitle_color_ranges,
         ):
             # 새 작업 추가
             running.add(

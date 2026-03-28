@@ -1,7 +1,6 @@
 import os
 import sys
 import re
-import json
 import uuid
 import asyncio
 import time
@@ -12,7 +11,7 @@ import traceback
 from enum import Enum
 from json import dumps
 from pathlib import Path
-from dataclasses import dataclass, asdict, field
+from dataclasses import dataclass, asdict
 from typing import Dict, List, Optional
 
 import cv2
@@ -58,8 +57,6 @@ class Task:
     mask_y: Optional[int] = None
     mask_width: Optional[int] = None
     mask_height: Optional[int] = None
-    subtitle_color_enabled: bool = False
-    subtitle_color_ranges: list[dict] = field(default_factory=list)
     result: Optional[str] = None
     error: Optional[str] = None
 
@@ -199,6 +196,8 @@ def load_tasks():
                             tasks[tid] = data
                         elif isinstance(data, dict):
                             data.pop('messages', None)
+                            data.pop('subtitle_color_enabled', None)
+                            data.pop('subtitle_color_ranges', None)
                             data['status'] = Status(data.get('status', Status.fatal_error))
                             tasks[tid] = Task(**data)
                         else:
@@ -413,49 +412,6 @@ async def browse(path: str = ""):
         rel_path = ""
     return {"path": rel_path, "entries": entries}
 
-def normalize_subtitle_color_ranges(raw_ranges: Optional[str]) -> list[dict]:
-    if raw_ranges is None or not raw_ranges.strip():
-        return []
-
-    try:
-        parsed = json.loads(raw_ranges)
-    except json.JSONDecodeError as exc:
-        raise HTTPException(status_code=400, detail=f"Invalid subtitle_color_ranges JSON: {exc.msg}") from exc
-
-    if not isinstance(parsed, list):
-        raise HTTPException(status_code=400, detail="subtitle_color_ranges must be a JSON array.")
-
-    normalized: list[dict] = []
-    for index, item in enumerate(parsed):
-        if not isinstance(item, dict):
-            raise HTTPException(status_code=400, detail=f"subtitle_color_ranges[{index}] must be an object.")
-
-        try:
-            r = int(item.get("r"))
-            g = int(item.get("g"))
-            b = int(item.get("b"))
-            tolerance = int(item.get("tolerance", 20))
-        except (TypeError, ValueError):
-            raise HTTPException(
-                status_code=400,
-                detail=f"subtitle_color_ranges[{index}] must contain integer r, g, b, tolerance.",
-            )
-
-        if not (0 <= r <= 255 and 0 <= g <= 255 and 0 <= b <= 255 and 0 <= tolerance <= 255):
-            raise HTTPException(
-                status_code=400,
-                detail=f"subtitle_color_ranges[{index}] values must be in range 0~255.",
-            )
-
-        normalized.append({
-            "r": r,
-            "g": g,
-            "b": b,
-            "tolerance": tolerance,
-        })
-
-    return normalized
-
 # ---------------------------
 # 백그라운드 OCR 작업 관련 함수 및 엔드포인트
 # ---------------------------
@@ -473,8 +429,6 @@ async def start_ocr_endpoint(
     mask_y: Optional[int] = Form(None),
     mask_width: Optional[int] = Form(None),
     mask_height: Optional[int] = Form(None),
-    subtitle_color_enabled: bool = Form(False),
-    subtitle_color_ranges: Optional[str] = Form(None),
 ):
     if not current_settings.llm_base_url:
         raise HTTPException(status_code=400, detail="LLM Base URL 설정이 필요합니다.")
@@ -551,10 +505,6 @@ async def start_ocr_endpoint(
         if mask_x + mask_width > frame_width or mask_y + mask_height > frame_height:
             raise HTTPException(status_code=400, detail="Mask area must stay within the video frame.")
 
-    normalized_subtitle_color_ranges = normalize_subtitle_color_ranges(subtitle_color_ranges)
-    if subtitle_color_enabled and not normalized_subtitle_color_ranges:
-        normalized_subtitle_color_ranges = [{"r": 0, "g": 0, "b": 0, "tolerance": 20}]
-
     task_id = str(uuid.uuid4())
     tasks[task_id] = Task(
         task_id=task_id,
@@ -574,8 +524,6 @@ async def start_ocr_endpoint(
         mask_y=mask_y if has_mask else None,
         mask_width=mask_width if has_mask else None,
         mask_height=mask_height if has_mask else None,
-        subtitle_color_enabled=subtitle_color_enabled,
-        subtitle_color_ranges=normalized_subtitle_color_ranges,
     )
 
     # 생성된 작업을 즉시 브로드캐스트하여 클라이언트에 표시
@@ -600,8 +548,6 @@ async def run_ocr_task(
     mask_y=None,
     mask_width=None,
     mask_height=None,
-    subtitle_color_enabled=False,
-    subtitle_color_ranges=None,
 ):
     print(f"[시작] {task_id} - {video_filename}")
 
@@ -665,8 +611,6 @@ async def run_ocr_task(
             mask_y=mask_y,
             mask_width=mask_width,
             mask_height=mask_height,
-            subtitle_color_enabled=subtitle_color_enabled,
-            subtitle_color_ranges=subtitle_color_ranges,
         ):
             # 중지 요청이 들어오면 현재 진행 중인 OCR 을 중단합니다.
             if task.status == Status.stopping:
@@ -739,8 +683,6 @@ async def start_next_task():
             next_task.mask_y,
             next_task.mask_width,
             next_task.mask_height,
-            next_task.subtitle_color_enabled,
-            next_task.subtitle_color_ranges,
         )
     )
 
