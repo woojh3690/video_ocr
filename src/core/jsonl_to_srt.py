@@ -11,8 +11,7 @@ from typing import List
 import cv2
 import numpy as np
 import unicodedata
-from norfair import Detection, Tracker
-from norfair.tracker import TrackedObject
+from norfair_rs import Detection, Tracker, TrackedObject
 from PIL import Image, ImageDraw, ImageFont
 from langdetect import detect
 from langdetect.lang_detect_exception import LangDetectException
@@ -395,6 +394,7 @@ def jsonl_to_srt(jsonl_path_obj: Path, visualize=False):
             detections.append(Detection(
                 points=np.array([[x1, y1], [x2, y2]]),
                 data={
+                    "frame_idx": frame_info.frame_idx,
                     "det_index": det_idx,
                     "raw_text": text,
                     "norm_text": filtering_only_text(text),
@@ -402,17 +402,23 @@ def jsonl_to_srt(jsonl_path_obj: Path, visualize=False):
             ))
 
         # 현재 프레임 track id 슬롯 준비
-        frame_info.track_ids = [None] * len(rec_boxes)
         tracked_objects = tracker.update(detections=detections)
-
-        # 이번 프레임에서 생성된 detection만 사용
-        curr_det_ids = {id(d) for d in detections}
+        frame_info.track_ids = [None] * len(rec_boxes)
 
         for t in tracked_objects:
-            if id(t.last_detection) not in curr_det_ids:
-                continue  # 이전 프레임 last_detection 기반 트랙은 제외
-            det_index = t.last_detection.data["det_index"]
-            frame_info.track_ids[det_index] = t.id
+            track_id = t.id
+            if track_id is None or not t.last_detection:
+                continue
+
+            last_detection_data = t.last_detection.data or {}
+            if last_detection_data.get("frame_idx") != frame_info.frame_idx:
+                continue  # 이전 프레임 detection 기반으로 유지 중인 트랙은 제외
+
+            det_index = last_detection_data.get("det_index")
+            if det_index is None or not (0 <= det_index < len(frame_info.track_ids)):
+                continue
+
+            frame_info.track_ids[det_index] = int(track_id)
 
         if any(track_id is None for track_id in frame_info.track_ids):
             raise RuntimeError(

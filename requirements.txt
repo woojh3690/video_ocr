@@ -9,4 +9,5 @@ thefuzz
 langdetect
 docker
 kafka-python
-norfair
+norfair-rs
+Pillow
