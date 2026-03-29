@@ -11,6 +11,7 @@ from typing import List
 import cv2
 import numpy as np
 import unicodedata
+from alive_progress import alive_bar
 from norfair_rs import Detection, Tracker, TrackedObject
 from PIL import Image, ImageDraw, ImageFont
 from langdetect import detect
@@ -260,6 +261,70 @@ def _dump_visualized_frames(video_path: Path, frame_infos: list[FrameInfo], outp
     print(f"[Viz] 저장 완료: {saved_count}개, 건너뜀: {skipped_count}개")
 
 
+def _dump_visualized_frames_with_progress(video_path: Path, frame_infos: list[FrameInfo], output_dir: Path) -> None:
+    # 시각화 프레임 저장 시 alive-progress로 진행 상태를 표시
+    output_dir.mkdir(parents=True, exist_ok=True)
+    print(f"[Viz] Output dir: {output_dir}")
+
+    cap = cv2.VideoCapture(str(video_path))
+    if not cap.isOpened():
+        cap.release()
+        raise ValueError(f"Cannot open video file: {video_path}")
+
+    sorted_infos = sorted(frame_infos, key=lambda info: info.frame_idx)
+    if not sorted_infos:
+        cap.release()
+        print("[Viz] No frames to save.")
+        return
+
+    target_idx = 0
+    saved_count = 0
+    skipped_count = 0
+    total_targets = len(sorted_infos)
+    title = "Viz"
+    with alive_bar(total_targets, title=title, theme="classic", enrich_print=False, force_tty=True) as bar:
+        while target_idx < total_targets:
+            ret, frame = cap.read()
+            if not ret:
+                skipped_count += total_targets - target_idx
+                while target_idx < total_targets:
+                    target_idx += 1
+                    bar.text = f"saved={saved_count}, skipped={skipped_count}"
+                    bar()
+                break
+
+            current_frame_idx = int(cap.get(cv2.CAP_PROP_POS_FRAMES))
+            target_frame_idx = sorted_infos[target_idx].frame_idx
+
+            if current_frame_idx < target_frame_idx:
+                continue
+
+            if current_frame_idx > target_frame_idx:
+                while target_idx < total_targets and sorted_infos[target_idx].frame_idx < current_frame_idx:
+                    print(f"[Viz][Warn] Missing frame {sorted_infos[target_idx].frame_idx}, skipping.")
+                    skipped_count += 1
+                    target_idx += 1
+                    bar.text = f"saved={saved_count}, skipped={skipped_count}"
+                    bar()
+                continue
+
+            while target_idx < total_targets and sorted_infos[target_idx].frame_idx == current_frame_idx:
+                composed = _render_frame_pair(frame, sorted_infos[target_idx])
+                out_path = output_dir / f"frame_{current_frame_idx:06d}.jpg"
+                ok = cv2.imwrite(str(out_path), composed, [cv2.IMWRITE_JPEG_QUALITY, 95])
+                if ok:
+                    saved_count += 1
+                else:
+                    print(f"[Viz][Warn] Failed to save frame: {out_path}")
+                    skipped_count += 1
+                target_idx += 1
+                bar.text = f"saved={saved_count}, skipped={skipped_count}, frame={current_frame_idx}"
+                bar()
+
+    cap.release()
+    print(f"[Viz] Saved: {saved_count}, skipped: {skipped_count}")
+
+
 def jsonl_to_srt(jsonl_path_obj: Path, visualize=False):
     # 경로 확인
     if not jsonl_path_obj.exists():
@@ -503,7 +568,7 @@ def jsonl_to_srt(jsonl_path_obj: Path, visualize=False):
     # 처리 로직 주석
     if visualize:
         viz_output_dir = jsonl_path_obj.parent / f"{vd_file.stem}_viz_frames"
-        _dump_visualized_frames(vd_file, ocr_results, viz_output_dir)
+        _dump_visualized_frames_with_progress(vd_file, ocr_results, viz_output_dir)
 
     segments: list[Segment] = []
     track_frame_counts: dict[int, int] = defaultdict(int)

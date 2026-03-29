@@ -11,3 +11,4 @@ docker
 kafka-python
 norfair-rs
 Pillow
+alive-progress
