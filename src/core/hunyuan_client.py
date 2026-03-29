@@ -141,6 +141,7 @@ class HunyuanOCRClient:
 
         if last_error is not None:
             print(f"[Warn] HunyuanOCR 응답 파싱 실패: {last_error}")
+            print("[Warn] HunyuanOCR 원본 LLM 출력:", content)
         return []
 
     def iter_parser_candidates(self, text: str) -> list[str]:
