@@ -83,7 +83,7 @@ class HunyuanOCRClient:
         base64_img: str,
         image_width: int,
         image_height: int,
-    ) -> tuple[int, List[SpottingItem]]:
+    ) -> tuple[int, List[SpottingItem], str | None]:
         messages = [
             {"role": "system", "content": ""},
             {
@@ -102,6 +102,7 @@ class HunyuanOCRClient:
         ]
 
         spotting_list: list[SpottingItem] = []
+        raw_llm_output: str | None = None
         try:
             response = await self.client.chat.completions.create(
                 model=self.model,
@@ -113,7 +114,9 @@ class HunyuanOCRClient:
             content = self.extract_response_text(response.choices[0].message.content)
             content = self.clean_repeated_substrings(content)
             if content.strip():
-                spotting_list = self.parse_to_spotting_items(content, image_width, image_height)
+                spotting_list, parse_failed = self.parse_to_spotting_items(content, image_width, image_height)
+                if parse_failed:
+                    raw_llm_output = content
             spotting_list = self.dedup_spotting_items(spotting_list)
         except (ValidationError, LengthFinishReasonError) as exc:
             print(f"[Warn] 프레임 {frame_idx} OCR 중 예외 발생: {exc!r}")
@@ -123,26 +126,27 @@ class HunyuanOCRClient:
             print(f"[Error] {error}")
             raise error
 
-        return frame_idx, spotting_list
+        return frame_idx, spotting_list, raw_llm_output
 
     def parse_to_spotting_items(
         self,
         content: str,
         image_width: int,
         image_height: int,
-    ) -> list[SpottingItem]:
+    ) -> tuple[list[SpottingItem], bool]:
         last_error: Optional[Exception] = None
         for candidate in self.iter_parser_candidates(content):
             try:
                 predictions = self.parse_predictions(candidate)
-                return self.build_spotting_items(predictions, image_width, image_height)
+                return self.build_spotting_items(predictions, image_width, image_height), False
             except ValueError as exc:
                 last_error = exc
 
         if last_error is not None:
             print(f"[Warn] HunyuanOCR 응답 파싱 실패: {last_error}")
             print("[Warn] HunyuanOCR 원본 LLM 출력:", content)
-        return []
+            return [], True
+        return [], False
 
     def iter_parser_candidates(self, text: str) -> list[str]:
         candidates: list[str] = []

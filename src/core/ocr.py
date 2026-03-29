@@ -136,12 +136,14 @@ async def process_ocr(
     end_frame = int(cap.get(cv2.CAP_PROP_FRAME_COUNT)) if end_time is None else int(end_time * frame_rate) # OCR 종료 프레임
     total_frames = end_frame - start_frame # OCR 을 진행할 총 프레임 수
 
-    def write_json(fn: int, items: list[SpottingItem]):
+    def write_json(fn: int, items: list[SpottingItem], raw_llm_output: str | None = None):
         ocr_res_dict = {
             "frame_number": fn,
             "time": round(fn / frame_rate, 3),
             "spotting_items": [item.to_dict() for item in items],
         }
+        if raw_llm_output is not None:
+            ocr_res_dict["raw_llm_output"] = raw_llm_output
         line = json.dumps(ocr_res_dict, ensure_ascii=False) + "\n"
         jsonl_file.writelines(line)
 
@@ -163,7 +165,7 @@ async def process_ocr(
     jsonl_file = jsonl_path_obj.open("a", newline="", encoding="utf-8")
     try:
         #  결과를 순서대로 내보내기 위한 우선순위 큐
-        heap: list[tuple[int, str]] = []
+        heap: list[tuple[int, list[SpottingItem], str | None]] = []
         next_frame_to_write = start_ocr_frame + 1
 
         for frame_idx, img_b64, image_width, image_height in frame_batch_generator(
@@ -197,8 +199,8 @@ async def process_ocr(
             
             #  heap 안에 다음 프레임이 있으면 순서대로 기록
             while heap and heap[0][0] == next_frame_to_write:
-                frame_number, spotting_items = heappop(heap)
-                write_json(frame_number, spotting_items)
+                frame_number, spotting_items, raw_llm_output = heappop(heap)
+                write_json(frame_number, spotting_items, raw_llm_output)
                 next_frame_to_write += 1
                 yield round((frame_number - start_frame) / total_frames * 100, 2)
             jsonl_file.flush()
@@ -213,8 +215,8 @@ async def process_ocr(
 
         # heap 잔여 결과 정리
         while heap:
-            frame_number, spotting_items = heappop(heap)
-            write_json(frame_number, spotting_items)
+            frame_number, spotting_items, raw_llm_output = heappop(heap)
+            write_json(frame_number, spotting_items, raw_llm_output)
         jsonl_file.flush()
     finally:
         if running:
