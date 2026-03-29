@@ -9,15 +9,6 @@ from openai import AsyncOpenAI, LengthFinishReasonError
 from pydantic import ValidationError
 
 
-def normalize_openai_base_url(base_url: str | None) -> str:
-    value = (base_url or "").strip().rstrip("/")
-    if not value:
-        return ""
-    if not value.endswith("/v1"):
-        value = f"{value}/v1"
-    return value
-
-
 class OcrProcessingError(RuntimeError):
     def __init__(self, frame_number: int, original_exception: Exception):
         self.frame_number = frame_number
@@ -63,23 +54,16 @@ class SpottingItem:
 
 class HunyuanOCRClient:
     def __init__(self, base_url: str | None, model: str, api_key: str = "dummy_key"):
-        normalized_base_url = normalize_openai_base_url(base_url)
+
+        normalized_base_url = (base_url or "").strip().rstrip("/")
         if not normalized_base_url:
             raise ValueError("llm_base_url 설정이 필요합니다.")
+        if not normalized_base_url.endswith("/v1"):
+            normalized_base_url = f"{normalized_base_url}/v1"
+        normalized_base_url = normalized_base_url
 
-        self.client = AsyncOpenAI(
-            base_url=normalized_base_url,
-            api_key=api_key,
-        )
+        self.client = AsyncOpenAI(base_url=normalized_base_url, api_key=api_key)
         self.model = model
-        self._tasks = {
-            "ocr": "OCR:",
-            "table": "Table Recognition:",
-            "formula": "Formula Recognition:",
-            "chart": "Chart Recognition:",
-            "spotting": "检测并识别图片中的文字，将文本坐标格式化输出。",
-            "seal": "Seal Recognition:",
-        }
         self._loc_re = re.compile(r"<?\|LOC_(\d+(?:\.\d+)?)\|>", flags=re.IGNORECASE)
         self._coord_pair_re = re.compile(
             r"\(\s*(-?\d+(?:\.\d+)?)\s*,\s*(-?\d+(?:\.\d+)?)\s*\)\s*,\s*\(\s*(-?\d+(?:\.\d+)?)\s*,\s*(-?\d+(?:\.\d+)?)\s*\)"
@@ -99,7 +83,6 @@ class HunyuanOCRClient:
         base64_img: str,
         image_width: int,
         image_height: int,
-        task: str = "spotting",
     ) -> tuple[int, List[SpottingItem]]:
         messages = [
             {"role": "system", "content": ""},
@@ -112,7 +95,7 @@ class HunyuanOCRClient:
                     },
                     {
                         "type": "text",
-                        "text": self._tasks[task],
+                        "text": "检测并识别图片中的文字，将文本坐标格式化输出。",
                     },
                 ],
             },
