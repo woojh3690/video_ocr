@@ -636,16 +636,8 @@ def jsonl_to_srt(jsonl_path_obj: Path, visualize=False):
     # 처리 로직 주석
     segments.sort(key=lambda seg: (seg.start, seg.end, seg.text))
 
-    # 다음 자막과 겹치지 않도록 현재 end 시간 조정
-    min_subtitle_gap = 0.08  # 자막간 최소 간격 (약 2프레임)
-    for idx in range(len(segments) - 1):
-        current = segments[idx]
-        next_seg = segments[idx + 1]
-        latest_allowed_end = next_seg.start - min_subtitle_gap
-        if current.end > latest_allowed_end:
-            current.end = latest_allowed_end
 
-    # 보정 과정에서 end < start 인 세그먼트 제거
+    # end < start 인 세그먼트 제거
     segments = [seg for seg in segments if seg.end >= seg.start]
     for i, seg in enumerate(segments, start=1):
         seg.index = i
