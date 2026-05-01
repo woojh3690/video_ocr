@@ -96,6 +96,42 @@ def serialize_detector_blocks(frame_number: int, blocks: list[ChandraTextBlock])
     }
     return json.dumps(data, ensure_ascii=False) + "\n"
 
+
+def get_ocr_frame_range(video_path: str, start_time=0, end_time=None) -> tuple[int, int, int, float]:
+    cap = cv2.VideoCapture(video_path)
+    if not cap.isOpened():
+        cap.release()
+        raise ValueError(f"Cannot open video file: {video_path}")
+    frame_rate = cap.get(cv2.CAP_PROP_FPS)
+    start_frame = int(start_time * frame_rate)
+    end_frame = int(cap.get(cv2.CAP_PROP_FRAME_COUNT)) if end_time is None else int(end_time * frame_rate)
+    total_frames = end_frame - start_frame
+    cap.release()
+    return start_frame, end_frame, total_frames, frame_rate
+
+
+def is_detector_cache_complete(
+    video_filename: str,
+    start_time=0,
+    end_time=None,
+) -> bool:
+    video_path = os.path.join(UPLOAD_DIR, video_filename)
+    video_path_obj = Path(video_path)
+    detector_jsonl_path_obj = video_path_obj.with_suffix(".detector.jsonl")
+    if not detector_jsonl_path_obj.exists():
+        return False
+
+    jsonl_path_obj = video_path_obj.with_suffix(".jsonl")
+    last_frame_number = get_last_frame_number(jsonl_path_obj)
+    start_frame, end_frame, _total_frames, _frame_rate = get_ocr_frame_range(video_path, start_time, end_time)
+    start_ocr_frame = max(start_frame, last_frame_number)
+    required_frame_numbers = set(range(start_ocr_frame + 1, end_frame + 1))
+    if not required_frame_numbers:
+        return True
+
+    cached_frame_numbers = set(load_detector_cache(detector_jsonl_path_obj).keys())
+    return required_frame_numbers.issubset(cached_frame_numbers)
+
 # 시간을 포맷팅
 # 동영상 파일에서 프레임을 배치 단위로 생성하는 제너레이터.
 def frame_batch_generator(
@@ -208,11 +244,6 @@ async def process_ocr(
 
     # vLLM 클라이언트 초기화
     settings = get_settings()
-    detector_client = ChandraDetectorClient(
-        base_url=settings.detector_llm_base_url,
-        model=settings.detector_llm_model,
-        api_key=getattr(settings, "llm_api_key", None) or "dummy_key",
-    )
     recognizer_client = PaddleOCRRecognizerClient(
         base_url=settings.recognizer_llm_base_url,
         model=settings.recognizer_llm_model,
@@ -221,64 +252,74 @@ async def process_ocr(
 
     detected_blocks_by_frame = load_detector_cache(detector_jsonl_path_obj)
     processed_detector_frames = len(detected_blocks_by_frame)
+    required_detector_frame_numbers = set(range(start_ocr_frame + 1, end_frame + 1))
+    detector_cache_complete = required_detector_frame_numbers.issubset(detected_blocks_by_frame.keys())
 
-    detector_cap = open_video_at_frame(video_path, start_ocr_frame)
     pending_detector_tasks: set[asyncio.Task[tuple[int, list[ChandraTextBlock], str | None]]] = set()
-    yield 1
-    try:
-        with detector_jsonl_path_obj.open("a", newline="", encoding="utf-8") as detector_file:
-            async def flush_completed_detector_tasks(
-                done_tasks: set[asyncio.Task[tuple[int, list[ChandraTextBlock], str | None]]],
-            ) -> list[float]:
-                nonlocal processed_detector_frames
-                progress_values: list[float] = []
-                for task in done_tasks:
-                    frame_number, blocks, _ = await task
-                    detected_blocks_by_frame[frame_number] = blocks
-                    detector_file.writelines(serialize_detector_blocks(frame_number, blocks))
-                    detector_file.flush()
-                    processed_detector_frames += 1
-                    progress_values.append(round(min(50.0, processed_detector_frames / total_frames * 50.0), 2))
-                return progress_values
+    if detector_cache_complete:
+        yield 50
+    else:
+        detector_client = ChandraDetectorClient(
+            base_url=settings.detector_llm_base_url,
+            model=settings.detector_llm_model,
+            api_key=getattr(settings, "llm_api_key", None) or "dummy_key",
+        )
+        detector_cap = open_video_at_frame(video_path, start_ocr_frame)
+        yield 1
+        try:
+            with detector_jsonl_path_obj.open("a", newline="", encoding="utf-8") as detector_file:
+                async def flush_completed_detector_tasks(
+                    done_tasks: set[asyncio.Task[tuple[int, list[ChandraTextBlock], str | None]]],
+                ) -> list[float]:
+                    nonlocal processed_detector_frames
+                    progress_values: list[float] = []
+                    for task in done_tasks:
+                        frame_number, blocks, _ = await task
+                        detected_blocks_by_frame[frame_number] = blocks
+                        detector_file.writelines(serialize_detector_blocks(frame_number, blocks))
+                        detector_file.flush()
+                        processed_detector_frames += 1
+                        progress_values.append(round(min(50.0, processed_detector_frames / total_frames * 50.0), 2))
+                    return progress_values
 
-            for frame_idx, frame, image_width, image_height in frame_batch_generator(
-                detector_cap,
-                x,
-                y,
-                width,
-                height,
-                full_screen_ocr=full_screen_ocr,
-                end_frame=end_frame,
-                mask_x=mask_x,
-                mask_y=mask_y,
-                mask_width=mask_width,
-                mask_height=mask_height,
-            ):
-                if frame_idx in detected_blocks_by_frame:
-                    yield round(min(50.0, processed_detector_frames / total_frames * 50.0), 2)
-                    continue
+                for frame_idx, frame, image_width, image_height in frame_batch_generator(
+                    detector_cap,
+                    x,
+                    y,
+                    width,
+                    height,
+                    full_screen_ocr=full_screen_ocr,
+                    end_frame=end_frame,
+                    mask_x=mask_x,
+                    mask_y=mask_y,
+                    mask_width=mask_width,
+                    mask_height=mask_height,
+                ):
+                    if frame_idx in detected_blocks_by_frame:
+                        yield round(min(50.0, processed_detector_frames / total_frames * 50.0), 2)
+                        continue
 
-                pending_detector_tasks.add(asyncio.create_task(detector_client.detect(frame_idx, frame)))
-                if len(pending_detector_tasks) >= DETECTOR_CONCURRENCY:
+                    pending_detector_tasks.add(asyncio.create_task(detector_client.detect(frame_idx, frame)))
+                    if len(pending_detector_tasks) >= DETECTOR_CONCURRENCY:
+                        done, pending_detector_tasks = await asyncio.wait(
+                            pending_detector_tasks,
+                            return_when=asyncio.FIRST_COMPLETED,
+                        )
+                        for progress in await flush_completed_detector_tasks(done):
+                            yield progress
+
+                while pending_detector_tasks:
                     done, pending_detector_tasks = await asyncio.wait(
                         pending_detector_tasks,
                         return_when=asyncio.FIRST_COMPLETED,
                     )
                     for progress in await flush_completed_detector_tasks(done):
                         yield progress
-
-            while pending_detector_tasks:
-                done, pending_detector_tasks = await asyncio.wait(
-                    pending_detector_tasks,
-                    return_when=asyncio.FIRST_COMPLETED,
-                )
-                for progress in await flush_completed_detector_tasks(done):
-                    yield progress
-    finally:
-        for task in pending_detector_tasks:
-            task.cancel()
-        if detector_cap.isOpened():
-            detector_cap.release()
+        finally:
+            for task in pending_detector_tasks:
+                task.cancel()
+            if detector_cap.isOpened():
+                detector_cap.release()
 
     if switch_to_recognizer is not None:
         should_continue = await switch_to_recognizer()

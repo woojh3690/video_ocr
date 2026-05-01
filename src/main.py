@@ -25,7 +25,7 @@ from kafka import KafkaProducer
 from docker.errors import APIError, DockerException
 from pydantic import BaseModel, ValidationError, ConfigDict
 
-from core.ocr import process_ocr, UPLOAD_DIR, OcrProcessingError
+from core.ocr import process_ocr, UPLOAD_DIR, OcrProcessingError, is_detector_cache_complete
 from core.docker_manager import DockerManager
 from core.settings_manager import AppSettings, settings_manager
 
@@ -685,16 +685,20 @@ async def run_ocr_task(
     task = tasks[task_id]
 
     try:
-        if not current_settings.detector_llm_base_url:
+        detector_cache_complete = is_detector_cache_complete(video_filename, start_time, end_time)
+        if not detector_cache_complete and not current_settings.detector_llm_base_url:
             raise RuntimeError("BBox Detector LLM Base URL 설정이 필요합니다.")
-        if not current_settings.detector_llm_model:
+        if not detector_cache_complete and not current_settings.detector_llm_model:
             raise RuntimeError("BBox Detector 모델 설정이 필요합니다.")
         if not current_settings.recognizer_llm_base_url:
             raise RuntimeError("OCR Recognizer LLM Base URL 설정이 필요합니다.")
         if not current_settings.recognizer_llm_model:
             raise RuntimeError("OCR Recognizer 모델 설정이 필요합니다.")
 
-        if not await ensure_vllm_role(DETECTOR_ROLE, task):
+        if detector_cache_complete:
+            if not await ensure_vllm_role(RECOGNIZER_ROLE, task):
+                return
+        elif not await ensure_vllm_role(DETECTOR_ROLE, task):
             return
 
         task.status = Status.running
