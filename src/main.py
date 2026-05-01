@@ -695,10 +695,8 @@ async def run_ocr_task(
         if not current_settings.recognizer_llm_model:
             raise RuntimeError("OCR Recognizer 모델 설정이 필요합니다.")
 
-        if detector_cache_complete:
-            if not await ensure_vllm_role(RECOGNIZER_ROLE, task):
-                return
-        elif not await ensure_vllm_role(DETECTOR_ROLE, task):
+        initial_role = RECOGNIZER_ROLE if detector_cache_complete else DETECTOR_ROLE
+        if not await ensure_vllm_role(initial_role, task):
             return
 
         task.status = Status.running

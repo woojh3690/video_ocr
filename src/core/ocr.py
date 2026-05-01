@@ -1,6 +1,7 @@
 import asyncio
 import os
 import json
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Awaitable, Callable, Generator, List
 
@@ -29,6 +30,51 @@ def read_positive_int_env(name: str, default: int) -> int:
 
 DETECTOR_CONCURRENCY = read_positive_int_env("DETECTOR_CONCURRENCY", 16)
 RECOGNIZER_CONCURRENCY = read_positive_int_env("RECOGNIZER_CONCURRENCY", 16)
+
+
+@dataclass(frozen=True, slots=True)
+class OcrPaths:
+    video_path: Path
+    jsonl_path: Path
+    detector_jsonl_path: Path
+
+
+@dataclass(slots=True)
+class RecognizerFrameState:
+    remaining: int
+    items: list[SpottingItem | None]
+
+
+def get_ocr_paths(video_filename: str) -> OcrPaths:
+    video_path = Path(UPLOAD_DIR) / video_filename
+    return OcrPaths(
+        video_path=video_path,
+        jsonl_path=video_path.with_suffix(".jsonl"),
+        detector_jsonl_path=video_path.with_suffix(".detector.jsonl"),
+    )
+
+
+def get_required_frame_numbers(start_frame: int, end_frame: int, last_frame_number: int) -> set[int]:
+    start_ocr_frame = max(start_frame, last_frame_number)
+    return set(range(start_ocr_frame + 1, end_frame + 1))
+
+
+def phase_progress(processed: int, total: int, start: float, end: float, cap: float) -> float:
+    span = end - start
+    value = start + (processed / max(1, total)) * span
+    return round(min(cap, value), 2)
+
+
+async def wait_for_completed_tasks(pending_tasks: set[asyncio.Task]):
+    return await asyncio.wait(pending_tasks, return_when=asyncio.FIRST_COMPLETED)
+
+
+async def collect_completed_progress(
+    pending_tasks: set[asyncio.Task],
+    flush_completed_tasks: Callable[[set[asyncio.Task]], Awaitable[list[float]]],
+) -> tuple[set[asyncio.Task], list[float]]:
+    done_tasks, pending_tasks = await wait_for_completed_tasks(pending_tasks)
+    return pending_tasks, await flush_completed_tasks(done_tasks)
 
 # 가장 마지막으로 OCR 처리된 프레임 번호를 반환
 def get_last_frame_number(jsonl_path: Path) -> int:
@@ -83,6 +129,20 @@ def load_detector_cache(detector_jsonl_path: Path) -> dict[int, list[ChandraText
     return detected_blocks_by_frame
 
 
+def load_detector_cache_frame_numbers(detector_jsonl_path: Path) -> set[int]:
+    if not detector_jsonl_path.exists():
+        return set()
+
+    frame_numbers: set[int] = set()
+    with detector_jsonl_path.open("r", encoding="utf-8") as detector_file:
+        for line in detector_file:
+            if not line.strip():
+                continue
+            data = json.loads(line)
+            frame_numbers.add(int(data["frame_number"]))
+    return frame_numbers
+
+
 def serialize_detector_blocks(frame_number: int, blocks: list[ChandraTextBlock]) -> str:
     data = {
         "frame_number": frame_number,
@@ -115,21 +175,21 @@ def is_detector_cache_complete(
     start_time=0,
     end_time=None,
 ) -> bool:
-    video_path = os.path.join(UPLOAD_DIR, video_filename)
-    video_path_obj = Path(video_path)
-    detector_jsonl_path_obj = video_path_obj.with_suffix(".detector.jsonl")
-    if not detector_jsonl_path_obj.exists():
+    paths = get_ocr_paths(video_filename)
+    if not paths.detector_jsonl_path.exists():
         return False
 
-    jsonl_path_obj = video_path_obj.with_suffix(".jsonl")
-    last_frame_number = get_last_frame_number(jsonl_path_obj)
-    start_frame, end_frame, _total_frames, _frame_rate = get_ocr_frame_range(video_path, start_time, end_time)
-    start_ocr_frame = max(start_frame, last_frame_number)
-    required_frame_numbers = set(range(start_ocr_frame + 1, end_frame + 1))
+    last_frame_number = get_last_frame_number(paths.jsonl_path)
+    start_frame, end_frame, _total_frames, _frame_rate = get_ocr_frame_range(
+        str(paths.video_path),
+        start_time,
+        end_time,
+    )
+    required_frame_numbers = get_required_frame_numbers(start_frame, end_frame, last_frame_number)
     if not required_frame_numbers:
         return True
 
-    cached_frame_numbers = set(load_detector_cache(detector_jsonl_path_obj).keys())
+    cached_frame_numbers = load_detector_cache_frame_numbers(paths.detector_jsonl_path)
     return required_frame_numbers.issubset(cached_frame_numbers)
 
 # 시간을 포맷팅
@@ -206,25 +266,16 @@ async def process_ocr(
         raise ValueError("Mask is only supported when full_screen_ocr is enabled.")
 
     # 파일 경로 정보 초기화
-    UPLOAD_DIR = "uploads"
-    video_path = os.path.join(UPLOAD_DIR, video_filename)
-    video_path_obj = Path(video_path)
-    jsonl_path_obj = video_path_obj.with_suffix(".jsonl")
-    detector_jsonl_path_obj = video_path_obj.with_suffix(".detector.jsonl")
+    paths = get_ocr_paths(video_filename)
+    video_path = str(paths.video_path)
+    jsonl_path_obj = paths.jsonl_path
+    detector_jsonl_path_obj = paths.detector_jsonl_path
 
     # 마지막으로 OCR 처리된 프레임 번호 확인
     last_frame_number = get_last_frame_number(jsonl_path_obj)
 
     # 영상 정보 추출
-    cap = cv2.VideoCapture(video_path)
-    if not cap.isOpened():
-        cap.release()
-        raise ValueError(f"Cannot open video file: {video_path}")
-    frame_rate = cap.get(cv2.CAP_PROP_FPS) # 초당 프레임 수
-    start_frame = int(start_time * frame_rate) # OCR 시작 프레임
-    end_frame = int(cap.get(cv2.CAP_PROP_FRAME_COUNT)) if end_time is None else int(end_time * frame_rate) # OCR 종료 프레임
-    total_frames = end_frame - start_frame # OCR 을 진행할 총 프레임 수
-    cap.release()
+    start_frame, end_frame, total_frames, frame_rate = get_ocr_frame_range(video_path, start_time, end_time)
 
     def write_json(fn: int, items: list[SpottingItem], raw_llm_output: str | None = None):
         ocr_res_dict = {
@@ -252,7 +303,7 @@ async def process_ocr(
 
     detected_blocks_by_frame = load_detector_cache(detector_jsonl_path_obj)
     processed_detector_frames = len(detected_blocks_by_frame)
-    required_detector_frame_numbers = set(range(start_ocr_frame + 1, end_frame + 1))
+    required_detector_frame_numbers = get_required_frame_numbers(start_frame, end_frame, last_frame_number)
     detector_cache_complete = required_detector_frame_numbers.issubset(detected_blocks_by_frame.keys())
 
     pending_detector_tasks: set[asyncio.Task[tuple[int, list[ChandraTextBlock], str | None]]] = set()
@@ -279,7 +330,7 @@ async def process_ocr(
                         detector_file.writelines(serialize_detector_blocks(frame_number, blocks))
                         detector_file.flush()
                         processed_detector_frames += 1
-                        progress_values.append(round(min(50.0, processed_detector_frames / total_frames * 50.0), 2))
+                        progress_values.append(phase_progress(processed_detector_frames, total_frames, 0.0, 50.0, 50.0))
                     return progress_values
 
                 for frame_idx, frame, image_width, image_height in frame_batch_generator(
@@ -296,24 +347,24 @@ async def process_ocr(
                     mask_height=mask_height,
                 ):
                     if frame_idx in detected_blocks_by_frame:
-                        yield round(min(50.0, processed_detector_frames / total_frames * 50.0), 2)
+                        yield phase_progress(processed_detector_frames, total_frames, 0.0, 50.0, 50.0)
                         continue
 
                     pending_detector_tasks.add(asyncio.create_task(detector_client.detect(frame_idx, frame)))
                     if len(pending_detector_tasks) >= DETECTOR_CONCURRENCY:
-                        done, pending_detector_tasks = await asyncio.wait(
+                        pending_detector_tasks, progress_values = await collect_completed_progress(
                             pending_detector_tasks,
-                            return_when=asyncio.FIRST_COMPLETED,
+                            flush_completed_detector_tasks,
                         )
-                        for progress in await flush_completed_detector_tasks(done):
+                        for progress in progress_values:
                             yield progress
 
                 while pending_detector_tasks:
-                    done, pending_detector_tasks = await asyncio.wait(
+                    pending_detector_tasks, progress_values = await collect_completed_progress(
                         pending_detector_tasks,
-                        return_when=asyncio.FIRST_COMPLETED,
+                        flush_completed_detector_tasks,
                     )
-                    for progress in await flush_completed_detector_tasks(done):
+                    for progress in progress_values:
                         yield progress
         finally:
             for task in pending_detector_tasks:
@@ -332,7 +383,7 @@ async def process_ocr(
     processed_recognizer_frames = 0
     pending_recognizer_tasks: set[asyncio.Task[tuple[int, int, SpottingItem | None]]] = set()
     recognizer_frame_order: list[int] = []
-    recognizer_frame_states: dict[int, dict] = {}
+    recognizer_frame_states: dict[int, RecognizerFrameState] = {}
     next_recognizer_write_index = 0
     try:
         with jsonl_path_obj.open("a", newline="", encoding="utf-8") as jsonl_file:
@@ -352,8 +403,8 @@ async def process_ocr(
                     frame_number, block_index, spotting_item = await task
                     frame_state = recognizer_frame_states[frame_number]
                     if spotting_item is not None:
-                        frame_state["items"][block_index] = spotting_item
-                    frame_state["remaining"] -= 1
+                        frame_state.items[block_index] = spotting_item
+                    frame_state.remaining -= 1
                 return write_ready_recognizer_frames()
 
             def write_ready_recognizer_frames() -> list[float]:
@@ -362,15 +413,15 @@ async def process_ocr(
                 while next_recognizer_write_index < len(recognizer_frame_order):
                     frame_number = recognizer_frame_order[next_recognizer_write_index]
                     frame_state = recognizer_frame_states[frame_number]
-                    if frame_state["remaining"] > 0:
+                    if frame_state.remaining > 0:
                         break
 
-                    spotting_items = [item for item in frame_state["items"] if item is not None]
+                    spotting_items = [item for item in frame_state.items if item is not None]
                     jsonl_file.writelines(write_json(frame_number, spotting_items))
                     jsonl_file.flush()
                     processed_recognizer_frames += 1
                     progress_values.append(
-                        round(min(99.0, 50.0 + processed_recognizer_frames / total_frames * 50.0), 2)
+                        phase_progress(processed_recognizer_frames, total_frames, 50.0, 100.0, 99.0)
                     )
                     del recognizer_frame_states[frame_number]
                     next_recognizer_write_index += 1
@@ -391,37 +442,37 @@ async def process_ocr(
             ):
                 blocks = detected_blocks_by_frame.get(frame_idx, [])
                 recognizer_frame_order.append(frame_idx)
-                recognizer_frame_states[frame_idx] = {
-                    "remaining": 0,
-                    "items": [None] * len(blocks),
-                }
+                recognizer_frame_states[frame_idx] = RecognizerFrameState(
+                    remaining=0,
+                    items=[None] * len(blocks),
+                )
 
                 for block_index, block in enumerate(blocks):
                     crop = crop_with_padding(frame, block.pixel_bbox)
                     if crop is None:
                         continue
 
-                    recognizer_frame_states[frame_idx]["remaining"] += 1
+                    recognizer_frame_states[frame_idx].remaining += 1
                     pending_recognizer_tasks.add(
                         asyncio.create_task(recognize_crop(frame_idx, block_index, block, crop))
                     )
                     if len(pending_recognizer_tasks) >= RECOGNIZER_CONCURRENCY:
-                        done, pending_recognizer_tasks = await asyncio.wait(
+                        pending_recognizer_tasks, progress_values = await collect_completed_progress(
                             pending_recognizer_tasks,
-                            return_when=asyncio.FIRST_COMPLETED,
+                            flush_completed_recognizer_tasks,
                         )
-                        for progress in await flush_completed_recognizer_tasks(done):
+                        for progress in progress_values:
                             yield progress
 
                 for progress in write_ready_recognizer_frames():
                     yield progress
 
             while pending_recognizer_tasks:
-                done, pending_recognizer_tasks = await asyncio.wait(
+                pending_recognizer_tasks, progress_values = await collect_completed_progress(
                     pending_recognizer_tasks,
-                    return_when=asyncio.FIRST_COMPLETED,
+                    flush_completed_recognizer_tasks,
                 )
-                for progress in await flush_completed_recognizer_tasks(done):
+                for progress in progress_values:
                     yield progress
             jsonl_file.flush()
     finally:
