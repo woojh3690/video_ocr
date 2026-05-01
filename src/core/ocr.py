@@ -48,6 +48,42 @@ def get_last_frame_number(jsonl_path: Path) -> int:
             return int(last_obj.get("frame_number"))
     return 0
 
+
+def load_detector_cache(detector_jsonl_path: Path) -> dict[int, list[ChandraTextBlock]]:
+    detected_blocks_by_frame: dict[int, list[ChandraTextBlock]] = {}
+    if not detector_jsonl_path.exists():
+        return detected_blocks_by_frame
+
+    with detector_jsonl_path.open("r", encoding="utf-8") as detector_file:
+        for line in detector_file:
+            if not line.strip():
+                continue
+            data = json.loads(line)
+            frame_number = int(data["frame_number"])
+            blocks = [
+                ChandraTextBlock(
+                    normalized_bbox=tuple(block["normalized_bbox"]),  # type: ignore[arg-type]
+                    pixel_bbox=tuple(block["pixel_bbox"]),  # type: ignore[arg-type]
+                )
+                for block in data.get("blocks", [])
+            ]
+            detected_blocks_by_frame[frame_number] = blocks
+    return detected_blocks_by_frame
+
+
+def serialize_detector_blocks(frame_number: int, blocks: list[ChandraTextBlock]) -> str:
+    data = {
+        "frame_number": frame_number,
+        "blocks": [
+            {
+                "normalized_bbox": list(block.normalized_bbox),
+                "pixel_bbox": list(block.pixel_bbox),
+            }
+            for block in blocks
+        ],
+    }
+    return json.dumps(data, ensure_ascii=False) + "\n"
+
 # 시간을 포맷팅
 # 동영상 파일에서 프레임을 배치 단위로 생성하는 제너레이터.
 def frame_batch_generator(
@@ -126,6 +162,7 @@ async def process_ocr(
     video_path = os.path.join(UPLOAD_DIR, video_filename)
     video_path_obj = Path(video_path)
     jsonl_path_obj = video_path_obj.with_suffix(".jsonl")
+    detector_jsonl_path_obj = video_path_obj.with_suffix(".detector.jsonl")
 
     # 마지막으로 OCR 처리된 프레임 번호 확인
     last_frame_number = get_last_frame_number(jsonl_path_obj)
@@ -150,11 +187,12 @@ async def process_ocr(
         if raw_llm_output is not None:
             ocr_res_dict["raw_llm_output"] = raw_llm_output
         line = json.dumps(ocr_res_dict, ensure_ascii=False) + "\n"
-        jsonl_file.writelines(line)
+        return line
 
     # OCR 을 진행할 프레임으로 이동
     start_ocr_frame = max(start_frame, last_frame_number)
     total_frames = max(1, total_frames)
+    jsonl_path_obj.touch(exist_ok=True)
 
     # vLLM 클라이언트 초기화
     settings = get_settings()
@@ -169,28 +207,36 @@ async def process_ocr(
         api_key=getattr(settings, "llm_api_key", None) or "dummy_key",
     )
 
-    detected_blocks_by_frame: dict[int, list[ChandraTextBlock]] = {}
-    processed_detector_frames = 0
+    detected_blocks_by_frame = load_detector_cache(detector_jsonl_path_obj)
+    processed_detector_frames = len(detected_blocks_by_frame)
 
     detector_cap = open_video_at_frame(video_path, start_ocr_frame)
+    yield 1
     try:
-        for frame_idx, frame, image_width, image_height in frame_batch_generator(
-            detector_cap,
-            x,
-            y,
-            width,
-            height,
-            full_screen_ocr=full_screen_ocr,
-            end_frame=end_frame,
-            mask_x=mask_x,
-            mask_y=mask_y,
-            mask_width=mask_width,
-            mask_height=mask_height,
-        ):
-            frame_number, blocks, _ = await detector_client.detect(frame_idx, frame)
-            detected_blocks_by_frame[frame_number] = blocks
-            processed_detector_frames += 1
-            yield round(min(50.0, processed_detector_frames / total_frames * 50.0), 2)
+        with detector_jsonl_path_obj.open("a", newline="", encoding="utf-8") as detector_file:
+            for frame_idx, frame, image_width, image_height in frame_batch_generator(
+                detector_cap,
+                x,
+                y,
+                width,
+                height,
+                full_screen_ocr=full_screen_ocr,
+                end_frame=end_frame,
+                mask_x=mask_x,
+                mask_y=mask_y,
+                mask_width=mask_width,
+                mask_height=mask_height,
+            ):
+                if frame_idx in detected_blocks_by_frame:
+                    yield round(min(50.0, processed_detector_frames / total_frames * 50.0), 2)
+                    continue
+
+                frame_number, blocks, _ = await detector_client.detect(frame_idx, frame)
+                detected_blocks_by_frame[frame_number] = blocks
+                detector_file.writelines(serialize_detector_blocks(frame_number, blocks))
+                detector_file.flush()
+                processed_detector_frames += 1
+                yield round(min(50.0, processed_detector_frames / total_frames * 50.0), 2)
     finally:
         if detector_cap.isOpened():
             detector_cap.release()
@@ -199,46 +245,48 @@ async def process_ocr(
         should_continue = await switch_to_recognizer()
         if not should_continue:
             return
+    yield 51
 
     # JSONL 파일에 OCR 결과를 저장하면 진행
     recognizer_cap = open_video_at_frame(video_path, start_ocr_frame)
-    jsonl_file = jsonl_path_obj.open("a", newline="", encoding="utf-8")
     processed_recognizer_frames = 0
     try:
-        for frame_idx, frame, image_width, image_height in frame_batch_generator(
-            recognizer_cap,
-            x,
-            y,
-            width,
-            height,
-            full_screen_ocr=full_screen_ocr,
-            end_frame=end_frame,
-            mask_x=mask_x,
-            mask_y=mask_y,
-            mask_width=mask_width,
-            mask_height=mask_height,
-        ):
-            spotting_items: list[SpottingItem] = []
-            for block in detected_blocks_by_frame.get(frame_idx, []):
-                crop = crop_with_padding(frame, block.pixel_bbox)
-                if crop is None:
-                    continue
-                text = await recognizer_client.recognize(frame_idx, crop)
-                spotting_item = spotting_item_from_block(block, text)
-                if spotting_item is not None:
-                    spotting_items.append(spotting_item)
+        with jsonl_path_obj.open("a", newline="", encoding="utf-8") as jsonl_file:
+            for frame_idx, frame, image_width, image_height in frame_batch_generator(
+                recognizer_cap,
+                x,
+                y,
+                width,
+                height,
+                full_screen_ocr=full_screen_ocr,
+                end_frame=end_frame,
+                mask_x=mask_x,
+                mask_y=mask_y,
+                mask_width=mask_width,
+                mask_height=mask_height,
+            ):
+                spotting_items: list[SpottingItem] = []
+                for block in detected_blocks_by_frame.get(frame_idx, []):
+                    crop = crop_with_padding(frame, block.pixel_bbox)
+                    if crop is None:
+                        continue
+                    text = await recognizer_client.recognize(frame_idx, crop)
+                    spotting_item = spotting_item_from_block(block, text)
+                    if spotting_item is not None:
+                        spotting_items.append(spotting_item)
 
-            write_json(frame_idx, spotting_items)
-            processed_recognizer_frames += 1
-            yield round(min(99.0, 50.0 + processed_recognizer_frames / total_frames * 50.0), 2)
+                jsonl_file.writelines(write_json(frame_idx, spotting_items))
+                processed_recognizer_frames += 1
+                yield round(min(99.0, 50.0 + processed_recognizer_frames / total_frames * 50.0), 2)
+                jsonl_file.flush()
             jsonl_file.flush()
-        jsonl_file.flush()
     finally:
-        jsonl_file.close()
         if recognizer_cap.isOpened():
             recognizer_cap.release()
 
     jsonl_to_srt(jsonl_path_obj)
+    if detector_jsonl_path_obj.exists():
+        detector_jsonl_path_obj.unlink()
 
     # 진행 상황 100%로 업데이트
     yield 100

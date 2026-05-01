@@ -698,6 +698,7 @@ async def run_ocr_task(
             return
 
         task.status = Status.running
+        task.progress = 1
         task.task_start_time = None
         await broadcast_update(task)
 
