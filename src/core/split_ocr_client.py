@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import base64
+import json
 import re
 from dataclasses import dataclass
 from html.parser import HTMLParser
@@ -112,8 +113,19 @@ Use the following labels:
 {PROMPT_ENDING}
 """.strip()
 
+TEXT_BBOX_ONLY_PROMPT = """
+Detect ordinary visible text-region bounding boxes in this image.
+Return only a JSON array. Each item must be an object: {"label":"Text","bbox":"x0 y0 x1 y1"}.
+Coordinates are normalized 0-1000. Do not OCR text. Do not describe images.
+Do not return non-text regions. If no text exists, return [].
+""".strip()
+
 PADDLE_OCR_PROMPT = "OCR:"
 _NUMBER_RE = re.compile(r"-?\d+(?:\.\d+)?")
+_TEXT_JSON_BBOX_RE = re.compile(
+    r'"label"\s*:\s*"Text".{0,80}?"?bbox"?\s*:\s*(?P<bbox>"[^"]+"|\[[^\]]+\])',
+    re.DOTALL,
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -200,7 +212,7 @@ class ChandraDetectorClient(OpenAIVisionClient):
         image_bgr: np.ndarray,
     ) -> tuple[int, list[ChandraTextBlock], str | None]:
         try:
-            content = await self.complete_image(image_bgr, OCR_LAYOUT_PROMPT, max_tokens=4096)
+            content = await self.complete_image(image_bgr, TEXT_BBOX_ONLY_PROMPT, max_tokens=512)
             content = clean_model_text(content)
             blocks = parse_chandra_text_blocks(content, image_bgr.shape[1], image_bgr.shape[0])
             return frame_idx, blocks, None
@@ -260,7 +272,7 @@ def extract_response_text(content: Any) -> str:
 
 def clean_model_text(text: str) -> str:
     candidate = re.sub(r"<think>.*?</think>\s*", "", text or "", flags=re.DOTALL)
-    code_block = re.search(r"```(?:html|text)?\s*(.*?)```", candidate, flags=re.DOTALL | re.IGNORECASE)
+    code_block = re.search(r"```(?:[a-zA-Z0-9_-]+)?\s*(.*?)```", candidate, flags=re.DOTALL | re.IGNORECASE)
     if code_block:
         candidate = code_block.group(1)
     return candidate.strip()
@@ -275,6 +287,15 @@ def clean_plain_ocr_text(text: str) -> str:
 def parse_chandra_text_blocks(content: str, image_width: int, image_height: int) -> list[ChandraTextBlock]:
     if image_width <= 0 or image_height <= 0:
         raise ValueError("이미지 크기가 올바르지 않습니다.")
+
+    json_bbox_values = parse_chandra_json_bbox_values(content or "")
+    if json_bbox_values is not None:
+        blocks: list[ChandraTextBlock] = []
+        for bbox_value in json_bbox_values:
+            block = build_chandra_text_block(bbox_value, image_width, image_height)
+            if block is not None:
+                blocks.append(block)
+        return dedup_blocks(blocks)
 
     parser = ChandraLayoutParser()
     parser.feed(content or "")
@@ -295,6 +316,77 @@ def parse_bbox_value(value: str) -> tuple[float, float, float, float] | None:
     if len(numbers) < 4:
         return None
     return numbers[0], numbers[1], numbers[2], numbers[3]
+
+
+def parse_chandra_json_bbox_values(content: str) -> list[tuple[float, float, float, float]] | None:
+    candidate = clean_model_text(content)
+    if not candidate or candidate[0] not in "[{":
+        return None
+
+    try:
+        payload = json.loads(candidate)
+    except json.JSONDecodeError:
+        return parse_chandra_malformed_json_bbox_values(candidate)
+
+    if isinstance(payload, dict):
+        payload = [payload]
+    if not isinstance(payload, list):
+        return None
+
+    bboxes: list[tuple[float, float, float, float]] = []
+    for item in payload:
+        parsed = parse_chandra_json_bbox_item(item)
+        if parsed is not None:
+            bboxes.append(parsed)
+    return bboxes
+
+
+def parse_chandra_json_bbox_item(item: Any) -> tuple[float, float, float, float] | None:
+    if isinstance(item, dict):
+        label = item.get("label")
+        if label is not None and str(label).strip() != "Text":
+            return None
+        bbox = item.get("bbox") or item.get("data-bbox") or item.get("box")
+        return parse_json_bbox_value(bbox)
+
+    if isinstance(item, (list, tuple)):
+        return parse_json_bbox_value(item)
+
+    return None
+
+
+def parse_chandra_malformed_json_bbox_values(content: str) -> list[tuple[float, float, float, float]]:
+    bboxes: list[tuple[float, float, float, float]] = []
+    for match in _TEXT_JSON_BBOX_RE.finditer(content):
+        bbox_value = match.group("bbox").strip().strip('"')
+        parsed = parse_bbox_value(bbox_value)
+        if parsed is not None:
+            bboxes.append(parsed)
+    return bboxes
+
+
+def parse_json_bbox_value(value: Any) -> tuple[float, float, float, float] | None:
+    if isinstance(value, str):
+        return parse_bbox_value(value)
+
+    if isinstance(value, (list, tuple)):
+        numbers: list[float] = []
+        for item in value:
+            if isinstance(item, (int, float)):
+                numbers.append(float(item))
+                continue
+            if isinstance(item, str):
+                try:
+                    numbers.append(float(item.strip()))
+                except ValueError:
+                    return None
+                continue
+            return None
+        if len(numbers) < 4:
+            return None
+        return numbers[0], numbers[1], numbers[2], numbers[3]
+
+    return None
 
 
 def build_chandra_text_block(

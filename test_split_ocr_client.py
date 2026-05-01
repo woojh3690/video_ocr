@@ -35,6 +35,26 @@ class SplitOcrClientTests(unittest.TestCase):
 
         self.assertEqual(blocks[0].pixel_bbox, (100, 125, 500, 375))
 
+    def test_json_bbox_response_uses_only_text_items(self):
+        content = """
+        [
+          {"label": "Image", "bbox": "0 0 1000 1000"},
+          {"label": "Text", "bbox": "34 136 122 707"}
+        ]
+        """
+
+        blocks = parse_chandra_text_blocks(content, 1920, 1080)
+
+        self.assertEqual(len(blocks), 1)
+        self.assertEqual(blocks[0].normalized_bbox, (34, 136, 122, 707))
+
+    def test_malformed_json_bbox_response_is_recovered(self):
+        content = '[{"label": "Text",bbox": "41 78 132 680"}, {"label": "Text",bbox": "299 277 494 305"}]'
+
+        blocks = parse_chandra_text_blocks(content, 1920, 1080)
+
+        self.assertEqual([block.normalized_bbox for block in blocks], [(41, 78, 132, 680), (299, 277, 494, 305)])
+
     def test_crop_with_padding_is_clamped_to_image_bounds(self):
         image = np.zeros((100, 200, 3), dtype=np.uint8)
 
@@ -46,6 +66,9 @@ class SplitOcrClientTests(unittest.TestCase):
     def test_clean_plain_ocr_text_handles_empty_and_list_joined_text(self):
         self.assertEqual(clean_plain_ocr_text(" OCR:  hello \n"), "hello")
         self.assertEqual(clean_plain_ocr_text("   "), "")
+
+    def test_empty_chandra_response_has_no_blocks(self):
+        self.assertEqual(parse_chandra_text_blocks("", 1920, 1080), [])
 
 
 if __name__ == "__main__":
