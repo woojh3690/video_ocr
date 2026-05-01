@@ -22,12 +22,11 @@ class OcrPipelineTests(unittest.IsolatedAsyncioTestCase):
         self.video_name = f"{self.stem}.mp4"
         self.video_path = self.upload_dir / self.video_name
         self.jsonl_path = self.upload_dir / f"{self.stem}.jsonl"
-        self.detector_jsonl_path = self.upload_dir / f"{self.stem}.detector.jsonl"
         self.srt_path = self.upload_dir / f"{self.stem}.srt"
         self._write_video(frame_count=6)
 
     def tearDown(self):
-        for path in (self.video_path, self.jsonl_path, self.detector_jsonl_path, self.srt_path):
+        for path in (self.video_path, self.jsonl_path, self.srt_path):
             if path.exists():
                 path.unlink()
 
@@ -38,7 +37,7 @@ class OcrPipelineTests(unittest.IsolatedAsyncioTestCase):
         writer.release()
 
     def _write_detector_cache(self, frame_numbers: range, with_blocks: bool = False):
-        with self.detector_jsonl_path.open("w", encoding="utf-8") as detector_file:
+        with self.jsonl_path.open("w", encoding="utf-8") as jsonl_file:
             for frame_number in frame_numbers:
                 blocks = []
                 if with_blocks:
@@ -48,7 +47,22 @@ class OcrPipelineTests(unittest.IsolatedAsyncioTestCase):
                             "pixel_bbox": [0, 0, 24, 24],
                         }
                     ]
-                detector_file.write(json.dumps({"frame_number": frame_number, "blocks": blocks}) + "\n")
+                jsonl_file.write(json.dumps({
+                    "record_type": "detector",
+                    "frame_number": frame_number,
+                    "time": round(frame_number / 10, 3),
+                    "detector_blocks": blocks,
+                }) + "\n")
+
+    def _write_ocr_cache(self, frame_numbers: range):
+        with self.jsonl_path.open("w", encoding="utf-8") as jsonl_file:
+            for frame_number in frame_numbers:
+                jsonl_file.write(json.dumps({
+                    "record_type": "ocr",
+                    "frame_number": frame_number,
+                    "time": round(frame_number / 10, 3),
+                    "spotting_items": [],
+                }) + "\n")
 
     async def _run_pipeline(self, detector_cls, recognizer_cls):
         with (
@@ -87,6 +101,12 @@ class OcrPipelineTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(progress_values[0], 50)
         self.assertEqual(progress_values[-1], 100)
+        final_records = [
+            json.loads(line)
+            for line in self.jsonl_path.read_text(encoding="utf-8").splitlines()
+        ]
+        self.assertTrue(final_records)
+        self.assertTrue(all("record_type" not in record for record in final_records))
 
     async def test_incomplete_detector_cache_runs_detector(self):
         self._write_detector_cache(range(1, 4))
@@ -110,6 +130,7 @@ class OcrPipelineTests(unittest.IsolatedAsyncioTestCase):
         await self._run_pipeline(FakeDetector, FakeRecognizer)
 
         self.assertTrue(calls)
+        self.assertEqual(calls, [4, 5, 6])
 
     async def test_recognizer_concurrency_keeps_jsonl_frame_order(self):
         self._write_detector_cache(range(1, 7), with_blocks=True)
@@ -133,6 +154,32 @@ class OcrPipelineTests(unittest.IsolatedAsyncioTestCase):
             for line in self.jsonl_path.read_text(encoding="utf-8").splitlines()
         ]
         self.assertEqual(frame_numbers, sorted(frame_numbers))
+
+    async def test_existing_ocr_cache_skips_recognition_and_compacts(self):
+        self._write_ocr_cache(range(1, 7))
+        recognize_calls = []
+
+        class DetectorMustNotRun:
+            def __init__(self, *args, **kwargs):
+                raise AssertionError("detector should be skipped")
+
+        class FakeRecognizer:
+            def __init__(self, *args, **kwargs):
+                pass
+
+            async def recognize(self, frame_idx, crop):
+                recognize_calls.append(frame_idx)
+                return ""
+
+        await self._run_pipeline(DetectorMustNotRun, FakeRecognizer)
+
+        self.assertEqual(recognize_calls, [])
+        final_records = [
+            json.loads(line)
+            for line in self.jsonl_path.read_text(encoding="utf-8").splitlines()
+        ]
+        self.assertEqual([record["frame_number"] for record in final_records], list(range(1, 7)))
+        self.assertTrue(all("record_type" not in record for record in final_records))
 
 
 if __name__ == "__main__":
