@@ -64,11 +64,14 @@ class Task:
 class SettingsUpdateRequest(BaseModel):
     docker_enabled: Optional[bool] = None
     docker_url: Optional[str] = None
-    docker_name: Optional[str] = None
+    detector_docker_name: Optional[str] = None
+    recognizer_docker_name: Optional[str] = None
     kafka_enabled: Optional[bool] = None
     kafka_url: Optional[str] = None
-    llm_base_url: Optional[str] = None
-    llm_model: Optional[str] = None
+    detector_llm_base_url: Optional[str] = None
+    detector_llm_model: Optional[str] = None
+    recognizer_llm_base_url: Optional[str] = None
+    recognizer_llm_model: Optional[str] = None
     llm_api_key: Optional[str] = None
 
     model_config = ConfigDict(extra="forbid")
@@ -76,7 +79,9 @@ class SettingsUpdateRequest(BaseModel):
 current_settings: AppSettings = settings_manager.get_settings()
 docker_manager: Optional[DockerManager] = None
 kafka_producer: Optional[KafkaProducer] = None
-docker_name: str = current_settings.docker_name
+
+DETECTOR_ROLE = "detector"
+RECOGNIZER_ROLE = "recognizer"
 
 
 def create_kafka_producer(settings: AppSettings) -> Optional[KafkaProducer]:
@@ -95,10 +100,9 @@ def create_kafka_producer(settings: AppSettings) -> Optional[KafkaProducer]:
 
 
 def apply_runtime_settings(settings: AppSettings) -> None:
-    global docker_manager, kafka_producer, docker_name, current_settings
+    global docker_manager, kafka_producer, current_settings
 
     current_settings = settings
-    docker_name = settings.docker_name
     docker_manager = None
     if settings.docker_enabled:
         try:
@@ -114,6 +118,47 @@ def apply_runtime_settings(settings: AppSettings) -> None:
             pass
 
     kafka_producer = create_kafka_producer(settings)
+
+
+def get_role_vllm_config(role: str, settings: AppSettings | None = None) -> dict[str, str | None]:
+    target_settings = settings or current_settings
+    if role == DETECTOR_ROLE:
+        return {
+            "role_name": "BBox Detector",
+            "docker_name": target_settings.detector_docker_name,
+            "base_url": target_settings.detector_llm_base_url,
+            "model": target_settings.detector_llm_model,
+        }
+    if role == RECOGNIZER_ROLE:
+        return {
+            "role_name": "OCR Recognizer",
+            "docker_name": target_settings.recognizer_docker_name,
+            "base_url": target_settings.recognizer_llm_base_url,
+            "model": target_settings.recognizer_llm_model,
+        }
+    raise ValueError(f"알 수 없는 vLLM 역할입니다: {role}")
+
+
+def get_opposite_role(role: str) -> str:
+    if role == DETECTOR_ROLE:
+        return RECOGNIZER_ROLE
+    if role == RECOGNIZER_ROLE:
+        return DETECTOR_ROLE
+    raise ValueError(f"알 수 없는 vLLM 역할입니다: {role}")
+
+
+def iter_configured_container_names(settings: AppSettings | None = None) -> list[str]:
+    target_settings = settings or current_settings
+    names = [
+        target_settings.detector_docker_name,
+        target_settings.recognizer_docker_name,
+    ]
+    unique_names: list[str] = []
+    for name in names:
+        cleaned_name = (name or "").strip()
+        if cleaned_name and cleaned_name not in unique_names:
+            unique_names.append(cleaned_name)
+    return unique_names
 
 
 def publish_kafka_message(topic: str, payload: dict) -> None:
@@ -289,11 +334,16 @@ async def update_settings_api(payload: SettingsUpdateRequest):
 
     if docker_enabled:
         docker_url_value = updates.get("docker_url", current_settings.docker_url)
-        docker_name_value = updates.get("docker_name", current_settings.docker_name)
+        detector_docker_name_value = updates.get("detector_docker_name", current_settings.detector_docker_name)
+        recognizer_docker_name_value = updates.get("recognizer_docker_name", current_settings.recognizer_docker_name)
         if not docker_url_value or not docker_url_value.strip():
             raise HTTPException(status_code=400, detail="Docker 엔드포인트를 입력해주세요.")
-        if not docker_name_value or not docker_name_value.strip():
-            raise HTTPException(status_code=400, detail="컨테이너 이름을 선택해주세요.")
+        if not detector_docker_name_value or not detector_docker_name_value.strip():
+            raise HTTPException(status_code=400, detail="BBox Detector 컨테이너 이름을 선택해주세요.")
+        if not recognizer_docker_name_value or not recognizer_docker_name_value.strip():
+            raise HTTPException(status_code=400, detail="OCR Recognizer 컨테이너 이름을 선택해주세요.")
+        if detector_docker_name_value.strip() == recognizer_docker_name_value.strip():
+            raise HTTPException(status_code=400, detail="Detector와 Recognizer는 서로 다른 컨테이너를 선택해주세요.")
         try:
             target_docker_manager = DockerManager(docker_url_value.strip())
             container_names = target_docker_manager.list_containers()
@@ -301,11 +351,16 @@ async def update_settings_api(payload: SettingsUpdateRequest):
             raise HTTPException(status_code=400, detail="Docker 연결을 확인할 수 없습니다.") from exc
         except Exception as exc:
             raise HTTPException(status_code=400, detail=f"Docker 연결 중 오류가 발생했습니다: {exc}") from exc
-        if docker_name_value.strip() not in set(container_names):
-            raise HTTPException(
-                status_code=400,
-                detail=f"선택한 컨테이너를 찾을 수 없습니다: {docker_name_value.strip()}",
-            )
+        container_name_set = set(container_names)
+        for role_label, docker_name_value in (
+            ("BBox Detector", detector_docker_name_value),
+            ("OCR Recognizer", recognizer_docker_name_value),
+        ):
+            if docker_name_value.strip() not in container_name_set:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"{role_label} 컨테이너를 찾을 수 없습니다: {docker_name_value.strip()}",
+                )
 
     kafka_enabled = updates.get("kafka_enabled")
     if kafka_enabled is None:
@@ -320,10 +375,14 @@ async def update_settings_api(payload: SettingsUpdateRequest):
             **updates,
         }
     ).normalized()
-    if not preview_settings.llm_base_url:
-        raise HTTPException(status_code=400, detail="LLM Base URL을 입력해주세요.")
-    if not preview_settings.llm_model:
-        raise HTTPException(status_code=400, detail="LLM 모델명을 입력해주세요.")
+    if not preview_settings.detector_llm_base_url:
+        raise HTTPException(status_code=400, detail="BBox Detector LLM Base URL을 입력해주세요.")
+    if not preview_settings.detector_llm_model:
+        raise HTTPException(status_code=400, detail="BBox Detector 모델명을 입력해주세요.")
+    if not preview_settings.recognizer_llm_base_url:
+        raise HTTPException(status_code=400, detail="OCR Recognizer LLM Base URL을 입력해주세요.")
+    if not preview_settings.recognizer_llm_model:
+        raise HTTPException(status_code=400, detail="OCR Recognizer 모델명을 입력해주세요.")
     try:
         new_settings = settings_manager.update(**updates)
     except ValidationError as exc:
@@ -334,19 +393,24 @@ async def update_settings_api(payload: SettingsUpdateRequest):
     apply_runtime_settings(new_settings)
     return new_settings.model_dump()
 
-async def is_vllm_health():
+async def is_vllm_health(role: str):
     """Check if vllm server is reachable"""
-    settings = current_settings
-    if not settings.llm_base_url:
+    config = get_role_vllm_config(role)
+    base_url = (config["base_url"] or "").strip()
+    if not base_url:
         return False
     client = openai.AsyncOpenAI(
-        base_url=settings.llm_base_url,
-        api_key=settings.llm_api_key or "dummy_key",
+        base_url=base_url,
+        api_key=current_settings.llm_api_key or "dummy_key",
     )
     try:
-        await client.models.list()
+        models = await client.models.list()
+        model_ids = [item.id for item in getattr(models, "data", []) if getattr(item, "id", None)]
+        if model_ids:
+            print(f"{config['role_name']} vLLM 모델 목록: {', '.join(model_ids)}")
         return True
-    except Exception:
+    except Exception as exc:
+        print(f"{config['role_name']} vLLM 헬스체크 실패: {exc}")
         return False
 
 @app.get("/videos/{video_path:path}")
@@ -430,10 +494,16 @@ async def start_ocr_endpoint(
     mask_width: Optional[int] = Form(None),
     mask_height: Optional[int] = Form(None),
 ):
-    if not current_settings.llm_base_url:
-        raise HTTPException(status_code=400, detail="LLM Base URL 설정이 필요합니다.")
-    if not current_settings.llm_model:
-        raise HTTPException(status_code=400, detail="LLM 모델 설정이 필요합니다.")
+    if not current_settings.docker_enabled:
+        raise HTTPException(status_code=400, detail="두 vLLM 컨테이너의 순차 실행을 보장하려면 Docker 자동 제어를 활성화해야 합니다.")
+    if not current_settings.detector_llm_base_url:
+        raise HTTPException(status_code=400, detail="BBox Detector LLM Base URL 설정이 필요합니다.")
+    if not current_settings.detector_llm_model:
+        raise HTTPException(status_code=400, detail="BBox Detector 모델 설정이 필요합니다.")
+    if not current_settings.recognizer_llm_base_url:
+        raise HTTPException(status_code=400, detail="OCR Recognizer LLM Base URL 설정이 필요합니다.")
+    if not current_settings.recognizer_llm_model:
+        raise HTTPException(status_code=400, detail="OCR Recognizer 모델 설정이 필요합니다.")
 
     duplicate_task_id = get_active_task_id_by_video_filename(video_filename)
     if duplicate_task_id is not None:
@@ -534,6 +604,67 @@ async def start_ocr_endpoint(
     
     return {"task_id": task_id}
 
+
+async def fail_task(task: Task, message: str) -> None:
+    task.status = Status.fatal_error
+    task.error = message
+    await broadcast_update(task)
+
+
+async def ensure_vllm_role(role: str, task: Task) -> bool:
+    config = get_role_vllm_config(role)
+    role_name = str(config["role_name"])
+    target_container_name = (config["docker_name"] or "").strip()
+
+    if not current_settings.docker_enabled:
+        await fail_task(task, "두 vLLM 컨테이너의 순차 실행을 보장하려면 Docker 자동 제어를 활성화해야 합니다.")
+        return False
+    if docker_manager is None:
+        await fail_task(task, "Docker 자동 제어가 활성화되어 있지만 DockerManager를 초기화하지 못했습니다.")
+        return False
+    if not target_container_name:
+        await fail_task(task, f"{role_name} 컨테이너 이름 설정이 필요합니다.")
+        return False
+
+    opposite_config = get_role_vllm_config(get_opposite_role(role))
+    opposite_container_name = (opposite_config["docker_name"] or "").strip()
+    if opposite_container_name and opposite_container_name != target_container_name:
+        try:
+            docker_manager.stop_container(opposite_container_name)
+        except (APIError, DockerException) as exc:
+            error_detail = getattr(exc, "explanation", None) or str(exc)
+            await fail_task(task, f"{opposite_config['role_name']} 컨테이너 중지 실패: {error_detail}")
+            return False
+        except Exception as exc:
+            await fail_task(task, f"{opposite_config['role_name']} 컨테이너 중지 중 알 수 없는 오류: {exc}")
+            return False
+
+    if await is_vllm_health(role):
+        print(f"{role_name} vLLM 서버가 준비되었습니다.")
+        return True
+
+    print(f"{role_name} vLLM 서버가 준비되지 않았습니다. 컨테이너를 시작합니다.")
+    try:
+        docker_manager.start_container(target_container_name)
+    except (APIError, DockerException) as exc:
+        error_detail = getattr(exc, "explanation", None) or str(exc)
+        await fail_task(task, f"{role_name} Docker 컨테이너 시작 실패: {error_detail}")
+        print(f"{role_name} Docker 컨테이너 시작 실패: {error_detail}")
+        return False
+    except Exception as exc:
+        await fail_task(task, f"{role_name} 컨테이너 시작 중 알 수 없는 오류: {exc}")
+        print(f"{role_name} 컨테이너 시작 중 알 수 없는 오류:", exc)
+        return False
+
+    for _ in range(60):
+        if await is_vllm_health(role):
+            print(f"{role_name} vLLM 서버가 준비되었습니다.")
+            return True
+        await asyncio.sleep(5)
+    await fail_task(task, f"{role_name} vLLM 서버가 제한 시간 안에 준비되지 않았습니다.")
+    return False
+
+
 async def run_ocr_task(
     task_id,
     video_filename,
@@ -554,50 +685,29 @@ async def run_ocr_task(
     task = tasks[task_id]
 
     try:
-        if not current_settings.llm_base_url:
-            raise RuntimeError("LLM Base URL 설정이 필요합니다.")
-        if not current_settings.llm_model:
-            raise RuntimeError("LLM 모델 설정이 필요합니다.")
+        if not current_settings.detector_llm_base_url:
+            raise RuntimeError("BBox Detector LLM Base URL 설정이 필요합니다.")
+        if not current_settings.detector_llm_model:
+            raise RuntimeError("BBox Detector 모델 설정이 필요합니다.")
+        if not current_settings.recognizer_llm_base_url:
+            raise RuntimeError("OCR Recognizer LLM Base URL 설정이 필요합니다.")
+        if not current_settings.recognizer_llm_model:
+            raise RuntimeError("OCR Recognizer 모델 설정이 필요합니다.")
 
-        # Ensure the vLLM container is running; start it if needed.
-        if not await is_vllm_health():
-            if not current_settings.docker_enabled:
-                task.status = Status.fatal_error
-                task.error = "vLLM 서버에 연결할 수 없습니다. Docker 자동 제어를 사용하지 않는 경우 서버를 먼저 실행해주세요."
-                await broadcast_update(task)
-                return
-
-            if docker_manager is None:
-                task.status = Status.fatal_error
-                task.error = "Docker 자동 제어가 활성화되어 있지만 DockerManager를 초기화하지 못했습니다."
-                await broadcast_update(task)
-                return
-
-            print("vLLM 서버가 준비되지 않았습니다. 컨테이너를 시작합니다.")
-            try:
-                docker_manager.start_container(docker_name)
-            except (APIError, DockerException) as e:
-                error_detail = getattr(e, "explanation", None) or str(e)
-                task.status = Status.fatal_error
-                task.error = f"Docker 컨테이너 시작 실패: {error_detail}"
-                await broadcast_update(task)
-                print(f"Docker 컨테이너 시작 실패: {error_detail}")
-                return
-            except Exception as e:
-                task.status = Status.fatal_error
-                task.error = f"컨테이너 시작 중 알 수 없는 오류: {e}"
-                await broadcast_update(task)
-                print("컨테이너 시작 중 알 수 없는 오류:", e)
-                return
-
-        # Wait until the vLLM server becomes healthy.
-        while not await is_vllm_health():
-            await asyncio.sleep(5)
-        print("vLLM 서버가 준비되었습니다.")
+        if not await ensure_vllm_role(DETECTOR_ROLE, task):
+            return
 
         task.status = Status.running
         task.task_start_time = None
         await broadcast_update(task)
+
+        async def switch_to_recognizer() -> bool:
+            if task.status == Status.stopping:
+                return False
+            if not await ensure_vllm_role(RECOGNIZER_ROLE, task):
+                raise RuntimeError(task.error or "OCR Recognizer vLLM 서버를 준비하지 못했습니다.")
+            return True
+
         async for progress in process_ocr(
             video_filename,
             x,
@@ -611,6 +721,7 @@ async def run_ocr_task(
             mask_y=mask_y,
             mask_width=mask_width,
             mask_height=mask_height,
+            switch_to_recognizer=switch_to_recognizer,
         ):
             # 중지 요청이 들어오면 현재 진행 중인 OCR 을 중단합니다.
             if task.status == Status.stopping:
@@ -625,7 +736,12 @@ async def run_ocr_task(
             except Exception as e:
                 print("Progress message 처리 오류:", e)
 
-        # Handle successful OCR completion.
+        if task.status == Status.stopping:
+            task.status = Status.stopped
+            await broadcast_update(task)
+            return
+
+        # OCR 완료 상태를 처리합니다.
         task.status = Status.completed
         filename_without_ext = os.path.splitext(os.path.basename(video_filename))[0]
         srt_path = os.path.join(UPLOAD_DIR, f"{filename_without_ext}.srt")
@@ -648,7 +764,7 @@ async def run_ocr_task(
         traceback.print_exc()
         await broadcast_update(task)
     finally:
-        # Kick off the next task after finishing the current one.
+        # 현재 작업이 끝나면 다음 작업을 시작합니다.
         await start_next_task()
 
 
@@ -661,10 +777,11 @@ async def start_next_task():
     next_id = get_next_waiting_task_id()
     if not next_id:
         if current_settings.docker_enabled and docker_manager is not None:
-            try:
-                docker_manager.stop_container(docker_name)
-            except Exception as exc:
-                print("Docker 컨테이너 중지 실패:", exc)
+            for container_name in iter_configured_container_names():
+                try:
+                    docker_manager.stop_container(container_name)
+                except Exception as exc:
+                    print("Docker 컨테이너 중지 실패:", exc)
         return
 
     next_task = tasks[next_id]

@@ -1,16 +1,20 @@
 import os
 import json
-import base64
-import asyncio
 from pathlib import Path
-from heapq import heappush, heappop
-from typing import List, Generator
+from typing import Awaitable, Callable, Generator, List
 
 import cv2
 
-from core.hunyuan_client import OcrProcessingError, SpottingItem, HunyuanOCRClient
+from core.hunyuan_client import OcrProcessingError, SpottingItem
 from core.jsonl_to_srt import jsonl_to_srt
 from core.settings_manager import get_settings
+from core.split_ocr_client import (
+    ChandraDetectorClient,
+    ChandraTextBlock,
+    PaddleOCRRecognizerClient,
+    crop_with_padding,
+    spotting_item_from_block,
+)
 
 UPLOAD_DIR = "uploads"
 
@@ -90,17 +94,16 @@ def frame_batch_generator(
                     thickness=-1,
                 )
 
-        # 이미지를 base64로 인코딩
-        success, buffer = cv2.imencode(
-            ".jpg",
-            working_frame,
-            [cv2.IMWRITE_JPEG_QUALITY, 95],
-        )
-        if not success:
-            raise ValueError(f"Failed to encode frame {frame_number} as JPEG.")
-        img_base64 = base64.b64encode(buffer).decode("utf-8")
+        yield [frame_number, working_frame, int(working_frame.shape[1]), int(working_frame.shape[0])]
 
-        yield [frame_number, img_base64, int(working_frame.shape[1]), int(working_frame.shape[0])]
+
+def open_video_at_frame(video_path: str, start_frame: int) -> cv2.VideoCapture:
+    cap = cv2.VideoCapture(video_path)
+    if not cap.isOpened():
+        cap.release()
+        raise ValueError(f"Cannot open video file: {video_path}")
+    cap.set(cv2.CAP_PROP_POS_FRAMES, start_frame)
+    return cap
 
 async def process_ocr(
     video_filename,
@@ -112,6 +115,7 @@ async def process_ocr(
     mask_y=None,
     mask_width=None,
     mask_height=None,
+    switch_to_recognizer: Callable[[], Awaitable[bool]] | None = None,
 ):
     has_any_mask_value = any(value is not None for value in (mask_x, mask_y, mask_width, mask_height))
     if has_any_mask_value and not full_screen_ocr:
@@ -135,6 +139,7 @@ async def process_ocr(
     start_frame = int(start_time * frame_rate) # OCR 시작 프레임
     end_frame = int(cap.get(cv2.CAP_PROP_FRAME_COUNT)) if end_time is None else int(end_time * frame_rate) # OCR 종료 프레임
     total_frames = end_frame - start_frame # OCR 을 진행할 총 프레임 수
+    cap.release()
 
     def write_json(fn: int, items: list[SpottingItem], raw_llm_output: str | None = None):
         ocr_res_dict = {
@@ -147,29 +152,30 @@ async def process_ocr(
         line = json.dumps(ocr_res_dict, ensure_ascii=False) + "\n"
         jsonl_file.writelines(line)
 
-    # OCR 을 진행할 프레임으로 이동 
+    # OCR 을 진행할 프레임으로 이동
     start_ocr_frame = max(start_frame, last_frame_number)
-    cap.set(cv2.CAP_PROP_POS_FRAMES, start_ocr_frame)
+    total_frames = max(1, total_frames)
 
-    # ollama 클라이언트 초기화
+    # vLLM 클라이언트 초기화
     settings = get_settings()
-    client = HunyuanOCRClient(
-        base_url=settings.llm_base_url,
-        model=settings.llm_model,
+    detector_client = ChandraDetectorClient(
+        base_url=settings.detector_llm_base_url,
+        model=settings.detector_llm_model,
         api_key=getattr(settings, "llm_api_key", None) or "dummy_key",
     )
-    
-    running: set[asyncio.Task] = set()
+    recognizer_client = PaddleOCRRecognizerClient(
+        base_url=settings.recognizer_llm_base_url,
+        model=settings.recognizer_llm_model,
+        api_key=getattr(settings, "llm_api_key", None) or "dummy_key",
+    )
 
-    # JSONL 파일에 OCR 결과를 저장하면 진행
-    jsonl_file = jsonl_path_obj.open("a", newline="", encoding="utf-8")
+    detected_blocks_by_frame: dict[int, list[ChandraTextBlock]] = {}
+    processed_detector_frames = 0
+
+    detector_cap = open_video_at_frame(video_path, start_ocr_frame)
     try:
-        #  결과를 순서대로 내보내기 위한 우선순위 큐
-        heap: list[tuple[int, list[SpottingItem], str | None]] = []
-        next_frame_to_write = start_ocr_frame + 1
-
-        for frame_idx, img_b64, image_width, image_height in frame_batch_generator(
-            cap,
+        for frame_idx, frame, image_width, image_height in frame_batch_generator(
+            detector_cap,
             x,
             y,
             width,
@@ -181,52 +187,56 @@ async def process_ocr(
             mask_width=mask_width,
             mask_height=mask_height,
         ):
-            # 새 작업 추가
-            running.add(
-                asyncio.create_task(
-                    client.predict(frame_idx, img_b64, image_width, image_height)
-                )
-            )
+            frame_number, blocks, _ = await detector_client.detect(frame_idx, frame)
+            detected_blocks_by_frame[frame_number] = blocks
+            processed_detector_frames += 1
+            yield round(min(50.0, processed_detector_frames / total_frames * 50.0), 2)
+    finally:
+        if detector_cap.isOpened():
+            detector_cap.release()
 
-            #  작업 수가 N개를 초과하였을 경우 완료된 작업만 기록
-            if len(running) >= 16:
-                done, running = await asyncio.wait(running, return_when=asyncio.FIRST_COMPLETED)
-                for t in done:
-                    try:
-                        heappush(heap, t.result())
-                    except OcrProcessingError as exc:
-                        raise exc
-            
-            #  heap 안에 다음 프레임이 있으면 순서대로 기록
-            while heap and heap[0][0] == next_frame_to_write:
-                frame_number, spotting_items, raw_llm_output = heappop(heap)
-                write_json(frame_number, spotting_items, raw_llm_output)
-                next_frame_to_write += 1
-                yield round((frame_number - start_frame) / total_frames * 100, 2)
+    if switch_to_recognizer is not None:
+        should_continue = await switch_to_recognizer()
+        if not should_continue:
+            return
+
+    # JSONL 파일에 OCR 결과를 저장하면 진행
+    recognizer_cap = open_video_at_frame(video_path, start_ocr_frame)
+    jsonl_file = jsonl_path_obj.open("a", newline="", encoding="utf-8")
+    processed_recognizer_frames = 0
+    try:
+        for frame_idx, frame, image_width, image_height in frame_batch_generator(
+            recognizer_cap,
+            x,
+            y,
+            width,
+            height,
+            full_screen_ocr=full_screen_ocr,
+            end_frame=end_frame,
+            mask_x=mask_x,
+            mask_y=mask_y,
+            mask_width=mask_width,
+            mask_height=mask_height,
+        ):
+            spotting_items: list[SpottingItem] = []
+            for block in detected_blocks_by_frame.get(frame_idx, []):
+                crop = crop_with_padding(frame, block.pixel_bbox)
+                if crop is None:
+                    continue
+                text = await recognizer_client.recognize(frame_idx, crop)
+                spotting_item = spotting_item_from_block(block, text)
+                if spotting_item is not None:
+                    spotting_items.append(spotting_item)
+
+            write_json(frame_idx, spotting_items)
+            processed_recognizer_frames += 1
+            yield round(min(99.0, 50.0 + processed_recognizer_frames / total_frames * 50.0), 2)
             jsonl_file.flush()
-        
-        # 남아 있는 태스크 모두 완료
-        if running:
-            results = await asyncio.gather(*running, return_exceptions=True)
-            for result in results:
-                if isinstance(result, Exception):
-                    raise result
-                heappush(heap, result)
-
-        # heap 잔여 결과 정리
-        while heap:
-            frame_number, spotting_items, raw_llm_output = heappop(heap)
-            write_json(frame_number, spotting_items, raw_llm_output)
         jsonl_file.flush()
     finally:
-        if running:
-            for task in list(running):
-                task.cancel()
-            await asyncio.gather(*running, return_exceptions=True)
-            running.clear()
         jsonl_file.close()
-        if cap.isOpened():
-            cap.release()
+        if recognizer_cap.isOpened():
+            recognizer_cap.release()
 
     jsonl_to_srt(jsonl_path_obj)
 

@@ -9,11 +9,14 @@ from pydantic import BaseModel, ValidationError, Field, ConfigDict
 DEFAULT_SETTINGS = {
     "docker_enabled": False,
     "docker_url": "",
-    "docker_name": "",
+    "detector_docker_name": "",
+    "recognizer_docker_name": "",
     "kafka_enabled": False,
     "kafka_url": "192.168.0.2:19092",
-    "llm_base_url": None,
-    "llm_model": "tencent/HunyuanOCR",
+    "detector_llm_base_url": None,
+    "detector_llm_model": "datalab-to/chandra-ocr-2",
+    "recognizer_llm_base_url": None,
+    "recognizer_llm_model": "PaddlePaddle/PaddleOCR-VL-1.5",
     "llm_api_key": None,
 }
 
@@ -33,11 +36,14 @@ def normalize_llm_base_url(base_url: Optional[str]) -> Optional[str]:
 class AppSettings(BaseModel):
     docker_enabled: bool = Field(default=DEFAULT_SETTINGS["docker_enabled"])
     docker_url: str = Field(default=DEFAULT_SETTINGS["docker_url"])
-    docker_name: str = Field(default=DEFAULT_SETTINGS["docker_name"])
+    detector_docker_name: str = Field(default=DEFAULT_SETTINGS["detector_docker_name"])
+    recognizer_docker_name: str = Field(default=DEFAULT_SETTINGS["recognizer_docker_name"])
     kafka_enabled: bool = Field(default=DEFAULT_SETTINGS["kafka_enabled"])
     kafka_url: str = Field(default=DEFAULT_SETTINGS["kafka_url"])
-    llm_base_url: Optional[str] = Field(default=DEFAULT_SETTINGS["llm_base_url"])
-    llm_model: str = Field(default=DEFAULT_SETTINGS["llm_model"])
+    detector_llm_base_url: Optional[str] = Field(default=DEFAULT_SETTINGS["detector_llm_base_url"])
+    detector_llm_model: str = Field(default=DEFAULT_SETTINGS["detector_llm_model"])
+    recognizer_llm_base_url: Optional[str] = Field(default=DEFAULT_SETTINGS["recognizer_llm_base_url"])
+    recognizer_llm_model: str = Field(default=DEFAULT_SETTINGS["recognizer_llm_model"])
     llm_api_key: Optional[str] = Field(default=DEFAULT_SETTINGS["llm_api_key"])
 
     model_config = ConfigDict(validate_assignment=True)
@@ -50,7 +56,8 @@ class AppSettings(BaseModel):
         for key, value in data.items():
             if isinstance(value, str):
                 data[key] = value.strip()
-        data["llm_base_url"] = normalize_llm_base_url(data.get("llm_base_url"))
+        data["detector_llm_base_url"] = normalize_llm_base_url(data.get("detector_llm_base_url"))
+        data["recognizer_llm_base_url"] = normalize_llm_base_url(data.get("recognizer_llm_base_url"))
         return AppSettings(**data)
 
 
@@ -75,11 +82,22 @@ class SettingsManager:
         try:
             raw = self._settings_path.read_text(encoding="utf-8")
             data = json.loads(raw) if raw else {}
+            if isinstance(data, dict):
+                data = self._migrate_legacy_settings(data)
             settings = AppSettings(**data).normalized()
         except (OSError, json.JSONDecodeError, ValidationError):
             settings = AppSettings().normalized()
             self._write_to_disk(settings)
         return settings
+
+    def _migrate_legacy_settings(self, data: dict) -> dict:
+        migrated = dict(data)
+        legacy_base_url = migrated.get("llm_base_url")
+        if legacy_base_url and not migrated.get("detector_llm_base_url"):
+            migrated["detector_llm_base_url"] = legacy_base_url
+        if legacy_base_url and not migrated.get("recognizer_llm_base_url"):
+            migrated["recognizer_llm_base_url"] = legacy_base_url
+        return migrated
 
     def _write_to_disk(self, settings: AppSettings) -> None:
         payload = settings.model_dump()

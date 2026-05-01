@@ -248,32 +248,31 @@ body.settings-page {
     line-height: 1.2;
 }
 
-.docker-name-header {
-    position: relative;
-    margin-bottom: .5rem;
-    padding-right: 7.5rem;
+.docker-url-row {
+    align-items: flex-start;
 }
 
-.docker-name-header label {
-    margin-bottom: 0;
+.docker-refresh-group {
+    display: flex;
+    align-items: flex-start;
+    padding-top: 1.95rem;
 }
 
 #refresh-docker-list {
-    position: absolute;
-    top: 50%;
-    right: 0;
-    transform: translateY(-50%);
+    margin-top: 0;
+    width: auto;
+    min-width: 8.5rem;
+    white-space: nowrap;
 }
 
 @media (max-width: 767.98px) {
-    .docker-name-header {
-        display: flex;
-        align-items: center;
-        justify-content: space-between;
+    .docker-refresh-group {
+        padding-top: 0;
     }
 
     #refresh-docker-list {
-        position: static;
+        margin-top: .5rem;
+        width: 100%;
     }
 }
 

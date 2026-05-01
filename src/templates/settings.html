@@ -23,26 +23,6 @@
 
         <form id="settings-form" class="settings-card shadow-sm rounded p-4">
             <section class="mb-4">
-                <h5 class="settings-section-title">LLM</h5>
-                <div class="form-row">
-                    <div class="form-group col-md-6">
-                        <label for="llm-base-url">LLM Base URL</label>
-                        <input type="text" id="llm-base-url" class="form-control" placeholder="http://127.0.0.1:8000">
-                        <small class="form-text text-muted">비워두면 기본 OpenAI 엔드포인트를 사용합니다.</small>
-                    </div>
-                    <div class="form-group col-md-6">
-                        <label for="llm-model">LLM 모델</label>
-                        <input type="text" id="llm-model" class="form-control" placeholder="Qwen/Qwen2.5-VL-3B-Instruct" required>
-                    </div>
-                </div>
-                <div class="form-group mb-0">
-                    <label for="llm-api-key">LLM API Key</label>
-                    <input type="password" id="llm-api-key" class="form-control" autocomplete="off" placeholder="sk-...">
-                    <small class="form-text text-muted">비워두면 요청 시 dummy_key를 사용합니다.</small>
-                </div>
-            </section>
-
-            <section class="mb-4">
                 <div class="settings-section-toggle d-flex align-items-center justify-content-start">
                     <div class="custom-control custom-switch">
                         <input type="checkbox" class="custom-control-input" id="docker-enabled">
@@ -50,24 +30,66 @@
                     </div>
                 </div>
                 <small class="form-text text-muted mb-3">
-                    켜면 OCR 작업 시작 시 컨테이너를 자동으로 시작하고, 대기 작업이 없으면 자동으로 중지합니다.
+                    켜면 OCR 작업 중 Detector와 Recognizer 컨테이너를 순차적으로 시작하고, 대기 작업이 없으면 자동으로 중지합니다.
                 </small>
-                <div class="form-row" id="docker-fields">
-                    <div class="form-group col-md-6">
+                <div class="form-row align-items-end docker-url-row">
+                    <div class="form-group col-md-8">
                         <label for="docker-url">Docker 데몬 엔드포인트</label>
-                        <input type="text" id="docker-url" class="form-control" placeholder="예: tcp://127.0.0.1:2375" required>
+                        <input type="text" id="docker-url" class="form-control docker-control" placeholder="예: tcp://127.0.0.1:2375" required>
                         <small class="form-text text-muted">형식: tcp://&lt;host&gt;:&lt;port&gt;</small>
                     </div>
-                    <div class="form-group col-md-6">
-                        <div class="docker-name-header">
-                            <label for="docker-name">컨테이너 이름</label>
-                            <button type="button" class="btn btn-sm btn-outline-secondary" id="refresh-docker-list">목록 새로고침</button>
-                        </div>
-                        <select id="docker-name" class="form-control" required>
-                            <option value="">컨테이너를 선택하세요</option>
-                        </select>
-                        <small class="form-text text-muted">엔드포인트를 입력한 뒤 목록에서 선택하세요.</small>
+                    <div class="form-group col-md-4 docker-refresh-group">
+                        <button type="button" class="btn btn-outline-secondary" id="refresh-docker-list">목록 새로고침</button>
                     </div>
+                </div>
+            </section>
+
+            <section class="mb-4">
+                <h5 class="settings-section-title">BBox Detector</h5>
+                <div class="form-row">
+                    <div class="form-group col-md-6">
+                        <label for="detector-llm-base-url">LLM Base URL</label>
+                        <input type="text" id="detector-llm-base-url" class="form-control" placeholder="http://127.0.0.1:8000">
+                    </div>
+                    <div class="form-group col-md-6">
+                        <label for="detector-llm-model">LLM 모델</label>
+                        <input type="text" id="detector-llm-model" class="form-control" placeholder="datalab-to/chandra-ocr-2" required>
+                    </div>
+                </div>
+                <div class="form-group docker-control-group">
+                    <label for="detector-docker-name">Detector 컨테이너 이름</label>
+                    <select id="detector-docker-name" class="form-control docker-control" required>
+                        <option value="">컨테이너를 선택하세요</option>
+                    </select>
+                </div>
+            </section>
+
+            <section class="mb-4">
+                <h5 class="settings-section-title">OCR Recognizer</h5>
+                <div class="form-row">
+                    <div class="form-group col-md-6">
+                        <label for="recognizer-llm-base-url">LLM Base URL</label>
+                        <input type="text" id="recognizer-llm-base-url" class="form-control" placeholder="http://127.0.0.1:8000">
+                    </div>
+                    <div class="form-group col-md-6">
+                        <label for="recognizer-llm-model">LLM 모델</label>
+                        <input type="text" id="recognizer-llm-model" class="form-control" placeholder="PaddlePaddle/PaddleOCR-VL-1.5" required>
+                    </div>
+                </div>
+                <div class="form-group docker-control-group mb-0">
+                    <label for="recognizer-docker-name">Recognizer 컨테이너 이름</label>
+                    <select id="recognizer-docker-name" class="form-control docker-control" required>
+                        <option value="">컨테이너를 선택하세요</option>
+                    </select>
+                </div>
+            </section>
+
+            <section class="mb-4">
+                <h5 class="settings-section-title">LLM 인증</h5>
+                <div class="form-group mb-0">
+                    <label for="llm-api-key">LLM API Key</label>
+                    <input type="password" id="llm-api-key" class="form-control" autocomplete="off" placeholder="sk-...">
+                    <small class="form-text text-muted">비워두면 요청 시 dummy_key를 사용합니다.</small>
                 </div>
             </section>
 
