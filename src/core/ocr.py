@@ -1,3 +1,4 @@
+import asyncio
 import os
 import json
 from pathlib import Path
@@ -17,6 +18,16 @@ from core.split_ocr_client import (
 )
 
 UPLOAD_DIR = "uploads"
+
+
+def read_positive_int_env(name: str, default: int) -> int:
+    try:
+        return max(1, int(os.getenv(name, str(default))))
+    except ValueError:
+        return default
+
+
+DETECTOR_CONCURRENCY = read_positive_int_env("DETECTOR_CONCURRENCY", 8)
 
 # 가장 마지막으로 OCR 처리된 프레임 번호를 반환
 def get_last_frame_number(jsonl_path: Path) -> int:
@@ -211,9 +222,24 @@ async def process_ocr(
     processed_detector_frames = len(detected_blocks_by_frame)
 
     detector_cap = open_video_at_frame(video_path, start_ocr_frame)
+    pending_detector_tasks: set[asyncio.Task[tuple[int, list[ChandraTextBlock], str | None]]] = set()
     yield 1
     try:
         with detector_jsonl_path_obj.open("a", newline="", encoding="utf-8") as detector_file:
+            async def flush_completed_detector_tasks(
+                done_tasks: set[asyncio.Task[tuple[int, list[ChandraTextBlock], str | None]]],
+            ) -> list[float]:
+                nonlocal processed_detector_frames
+                progress_values: list[float] = []
+                for task in done_tasks:
+                    frame_number, blocks, _ = await task
+                    detected_blocks_by_frame[frame_number] = blocks
+                    detector_file.writelines(serialize_detector_blocks(frame_number, blocks))
+                    detector_file.flush()
+                    processed_detector_frames += 1
+                    progress_values.append(round(min(50.0, processed_detector_frames / total_frames * 50.0), 2))
+                return progress_values
+
             for frame_idx, frame, image_width, image_height in frame_batch_generator(
                 detector_cap,
                 x,
@@ -231,13 +257,25 @@ async def process_ocr(
                     yield round(min(50.0, processed_detector_frames / total_frames * 50.0), 2)
                     continue
 
-                frame_number, blocks, _ = await detector_client.detect(frame_idx, frame)
-                detected_blocks_by_frame[frame_number] = blocks
-                detector_file.writelines(serialize_detector_blocks(frame_number, blocks))
-                detector_file.flush()
-                processed_detector_frames += 1
-                yield round(min(50.0, processed_detector_frames / total_frames * 50.0), 2)
+                pending_detector_tasks.add(asyncio.create_task(detector_client.detect(frame_idx, frame)))
+                if len(pending_detector_tasks) >= DETECTOR_CONCURRENCY:
+                    done, pending_detector_tasks = await asyncio.wait(
+                        pending_detector_tasks,
+                        return_when=asyncio.FIRST_COMPLETED,
+                    )
+                    for progress in await flush_completed_detector_tasks(done):
+                        yield progress
+
+            while pending_detector_tasks:
+                done, pending_detector_tasks = await asyncio.wait(
+                    pending_detector_tasks,
+                    return_when=asyncio.FIRST_COMPLETED,
+                )
+                for progress in await flush_completed_detector_tasks(done):
+                    yield progress
     finally:
+        for task in pending_detector_tasks:
+            task.cancel()
         if detector_cap.isOpened():
             detector_cap.release()
 
