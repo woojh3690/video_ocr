@@ -17,7 +17,7 @@ from PIL import Image, ImageDraw, ImageFont
 from langdetect import detect
 from langdetect.lang_detect_exception import LangDetectException
 
-from core.hunyuan_client import SpottingItem
+from core.ocr_types import SpottingItem
 from core.util import clean_ocr_text
 
 @dataclass

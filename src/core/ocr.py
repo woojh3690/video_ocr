@@ -7,8 +7,8 @@ from typing import Any, Awaitable, Callable, Generator, Iterable, List
 
 import cv2
 
-from core.hunyuan_client import OcrProcessingError, SpottingItem
 from core.jsonl_to_srt import jsonl_to_srt
+from core.ocr_types import OcrProcessingError, SpottingItem
 from core.settings_manager import get_settings
 from core.split_ocr_client import (
     ChandraDetectorClient,

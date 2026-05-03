@@ -12,7 +12,7 @@ import numpy as np
 from openai import AsyncOpenAI, LengthFinishReasonError
 from pydantic import ValidationError
 
-from core.hunyuan_client import OcrProcessingError, SpottingItem
+from core.ocr_types import OcrProcessingError, SpottingItem
 
 TEXT_BBOX_ONLY_PROMPT = """
 Detect ordinary visible text-region bounding boxes in this image.
