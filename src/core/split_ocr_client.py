@@ -102,7 +102,7 @@ class OpenAIVisionClient:
             temperature=0.0,
             stream=False,
             max_tokens=max_tokens,
-            **(extra_body or {})
+            extra_body=extra_body or {},
         )
         return extract_response_text(response.choices[0].message.content)
 
