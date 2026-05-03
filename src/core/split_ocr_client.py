@@ -86,7 +86,7 @@ class OpenAIVisionClient:
         self.client = AsyncOpenAI(base_url=normalized_base_url, api_key=api_key)
         self.model = model.strip()
 
-    async def complete_image(self, image_bgr: np.ndarray, prompt: str, max_tokens: int) -> str:
+    async def complete_image(self, image_bgr: np.ndarray, prompt: str, max_tokens: int, extra_body=None) -> str:
         data_url = image_to_data_url(image_bgr)
         response = await self.client.chat.completions.create(
             model=self.model,
@@ -102,6 +102,7 @@ class OpenAIVisionClient:
             temperature=0.0,
             stream=False,
             max_tokens=max_tokens,
+            **(extra_body or {})
         )
         return extract_response_text(response.choices[0].message.content)
 
@@ -133,7 +134,8 @@ class PaddleOCRRecognizerClient(OpenAIVisionClient):
         image_bgr: np.ndarray,
     ) -> str:
         try:
-            content = await self.complete_image(image_bgr, PADDLE_OCR_PROMPT, max_tokens=1024)
+            extra_body={ "repetition_penalty": 1.03 }
+            content = await self.complete_image(image_bgr, PADDLE_OCR_PROMPT, max_tokens=1024, extra_body=extra_body)
             return clean_plain_ocr_text(content)
         except (ValidationError, LengthFinishReasonError) as exc:
             print(f"[Warn] 프레임 {frame_idx} Paddle OCR 중 예외 발생: {exc!r}")
