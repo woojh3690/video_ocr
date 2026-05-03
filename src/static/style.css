@@ -302,6 +302,10 @@ body.settings-page {
     border-style: solid;
 }
 
+.ocr-mode-toggle {
+    min-width: 150px;
+}
+
 #mask-box {
     position: absolute;
     display: none;

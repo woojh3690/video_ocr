@@ -64,7 +64,21 @@ class OcrPipelineTests(unittest.IsolatedAsyncioTestCase):
                     "spotting_items": [],
                 }) + "\n")
 
-    async def _run_pipeline(self, detector_cls, recognizer_cls):
+    async def _run_pipeline(
+        self,
+        detector_cls,
+        recognizer_cls,
+        *,
+        full_screen_ocr: bool = True,
+        x: int = 0,
+        y: int = 0,
+        width: int = 48,
+        height: int = 48,
+        mask_x=None,
+        mask_y=None,
+        mask_width=None,
+        mask_height=None,
+    ):
         with (
             patch.object(ocr, "ChandraDetectorClient", detector_cls),
             patch.object(ocr, "PaddleOCRRecognizerClient", recognizer_cls),
@@ -73,11 +87,15 @@ class OcrPipelineTests(unittest.IsolatedAsyncioTestCase):
             progress_values = []
             async for progress in ocr.process_ocr(
                 self.video_name,
-                0,
-                0,
-                48,
-                48,
-                full_screen_ocr=True,
+                x,
+                y,
+                width,
+                height,
+                full_screen_ocr=full_screen_ocr,
+                mask_x=mask_x,
+                mask_y=mask_y,
+                mask_width=mask_width,
+                mask_height=mask_height,
                 switch_to_recognizer=lambda: asyncio.sleep(0, result=True),
             ):
                 progress_values.append(progress)
@@ -180,6 +198,48 @@ class OcrPipelineTests(unittest.IsolatedAsyncioTestCase):
         ]
         self.assertEqual([record["frame_number"] for record in final_records], list(range(1, 7)))
         self.assertTrue(all("record_type" not in record for record in final_records))
+
+    async def test_crop_mode_skips_detector_and_recognizes_crop_directly(self):
+        crop_shapes = []
+
+        class DetectorMustNotRun:
+            def __init__(self, *args, **kwargs):
+                raise AssertionError("detector should be skipped")
+
+        class FakeRecognizer:
+            def __init__(self, *args, **kwargs):
+                pass
+
+            async def recognize(self, frame_idx, crop):
+                crop_shapes.append(crop.shape[:2])
+                return f"crop text {frame_idx}"
+
+        progress_values = await self._run_pipeline(
+            DetectorMustNotRun,
+            FakeRecognizer,
+            full_screen_ocr=False,
+            x=10,
+            y=8,
+            width=20,
+            height=16,
+        )
+
+        self.assertEqual(progress_values[0], 1)
+        self.assertEqual(progress_values[-1], 100)
+        self.assertTrue(crop_shapes)
+        self.assertTrue(all(shape == (16, 20) for shape in crop_shapes))
+
+        final_records = [
+            json.loads(line)
+            for line in self.jsonl_path.read_text(encoding="utf-8").splitlines()
+        ]
+        self.assertTrue(final_records)
+        self.assertTrue(all(record["ocr_mode"] == "crop" for record in final_records))
+        self.assertTrue(all(record["ocr_area"] == [10, 8, 20, 16] for record in final_records))
+        expected_quad = [[0, 0], [1000, 0], [1000, 1000], [0, 1000]]
+        self.assertTrue(
+            all(record["spotting_items"][0]["quad"] == expected_quad for record in final_records)
+        )
 
 
 if __name__ == "__main__":

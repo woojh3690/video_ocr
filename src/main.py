@@ -52,7 +52,7 @@ class Task:
     ocr_height: int = 0
     ocr_start_time: Optional[int] = 0
     ocr_end_time: Optional[int] = None
-    full_screen_ocr: bool = False
+    full_screen_ocr: bool = True
     mask_x: Optional[int] = None
     mask_y: Optional[int] = None
     mask_width: Optional[int] = None
@@ -488,7 +488,7 @@ async def start_ocr_endpoint(
     height: int = Form(...),
     start_time: Optional[int] = Form(0),
     end_time: Optional[int] = Form(None),
-    full_screen_ocr: bool = Form(False),
+    full_screen_ocr: bool = Form(True),
     mask_x: Optional[int] = Form(None),
     mask_y: Optional[int] = Form(None),
     mask_width: Optional[int] = Form(None),
@@ -496,9 +496,9 @@ async def start_ocr_endpoint(
 ):
     if not current_settings.docker_enabled:
         raise HTTPException(status_code=400, detail="두 vLLM 컨테이너의 순차 실행을 보장하려면 Docker 자동 제어를 활성화해야 합니다.")
-    if not current_settings.detector_llm_base_url:
+    if full_screen_ocr and not current_settings.detector_llm_base_url:
         raise HTTPException(status_code=400, detail="BBox Detector LLM Base URL 설정이 필요합니다.")
-    if not current_settings.detector_llm_model:
+    if full_screen_ocr and not current_settings.detector_llm_model:
         raise HTTPException(status_code=400, detail="BBox Detector 모델 설정이 필요합니다.")
     if not current_settings.recognizer_llm_base_url:
         raise HTTPException(status_code=400, detail="OCR Recognizer LLM Base URL 설정이 필요합니다.")
@@ -530,6 +530,19 @@ async def start_ocr_endpoint(
         raise HTTPException(status_code=400, detail="FPS 값을 확인할 수 없습니다.")
     duration = frame_count / fps  # 비디오의 총 재생 시간(초)
     cap.release()
+
+    if full_screen_ocr:
+        x = 0
+        y = 0
+        width = frame_width
+        height = frame_height
+    else:
+        if width <= 0 or height <= 0:
+            raise HTTPException(status_code=400, detail="OCR width and height must be greater than 0.")
+        if x < 0 or y < 0:
+            raise HTTPException(status_code=400, detail="OCR x and y must be greater than or equal to 0.")
+        if x + width > frame_width or y + height > frame_height:
+            raise HTTPException(status_code=400, detail="OCR crop area must stay within the video frame.")
     
     # 범위 체크: start_time과 end_time이 올바른지 검증
     if start_time < 0:
@@ -555,17 +568,8 @@ async def start_ocr_endpoint(
         raise HTTPException(status_code=400, detail="Mask coordinates must include x, y, width, and height.")
 
     has_mask = has_all_mask_values
-    is_full_screen_area = (
-        x <= 0 and
-        y <= 0 and
-        x + width >= frame_width and
-        y + height >= frame_height
-    )
-
-    if has_mask and not full_screen_ocr:
-        raise HTTPException(status_code=400, detail="Mask is only supported when full_screen_ocr is enabled.")
-    if has_mask and not is_full_screen_area:
-        raise HTTPException(status_code=400, detail="Mask is only supported for full-screen OCR areas.")
+    if has_mask and full_screen_ocr:
+        raise HTTPException(status_code=400, detail="Mask is only supported in crop OCR mode.")
 
     if has_mask:
         if mask_width <= 0 or mask_height <= 0:
@@ -574,6 +578,13 @@ async def start_ocr_endpoint(
             raise HTTPException(status_code=400, detail="Mask x and y must be greater than or equal to 0.")
         if mask_x + mask_width > frame_width or mask_y + mask_height > frame_height:
             raise HTTPException(status_code=400, detail="Mask area must stay within the video frame.")
+        if (
+            mask_x < x or
+            mask_y < y or
+            mask_x + mask_width > x + width or
+            mask_y + mask_height > y + height
+        ):
+            raise HTTPException(status_code=400, detail="Mask area must stay within the OCR crop area.")
 
     task_id = str(uuid.uuid4())
     tasks[task_id] = Task(
@@ -674,7 +685,7 @@ async def run_ocr_task(
     height,
     start_time,
     end_time,
-    full_screen_ocr=False,
+    full_screen_ocr=True,
     mask_x=None,
     mask_y=None,
     mask_width=None,
@@ -685,10 +696,14 @@ async def run_ocr_task(
     task = tasks[task_id]
 
     try:
-        detector_cache_complete = is_detector_cache_complete(video_filename, start_time, end_time)
-        if not detector_cache_complete and not current_settings.detector_llm_base_url:
+        detector_cache_complete = (
+            True
+            if not full_screen_ocr
+            else is_detector_cache_complete(video_filename, start_time, end_time)
+        )
+        if full_screen_ocr and not detector_cache_complete and not current_settings.detector_llm_base_url:
             raise RuntimeError("BBox Detector LLM Base URL 설정이 필요합니다.")
-        if not detector_cache_complete and not current_settings.detector_llm_model:
+        if full_screen_ocr and not detector_cache_complete and not current_settings.detector_llm_model:
             raise RuntimeError("BBox Detector 모델 설정이 필요합니다.")
         if not current_settings.recognizer_llm_base_url:
             raise RuntimeError("OCR Recognizer LLM Base URL 설정이 필요합니다.")

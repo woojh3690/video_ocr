@@ -68,17 +68,21 @@
                     <input type="text" id="endTimeInput" placeholder="mm:ss" value="00:00" class="form-control">
                 </div>
                 <div class="col-md-8">
-                    <div class="form-check mt-4">
-                        <input class="form-check-input" type="checkbox" id="fullScreenOcrToggle">
-                        <label class="form-check-label" for="fullScreenOcrToggle">
-                            Full-screen OCR
-                        </label>
+                    <div class="mt-4">
+                        <button
+                            type="button"
+                            id="fullScreenOcrToggle"
+                            class="btn btn-primary ocr-mode-toggle active"
+                            aria-pressed="true"
+                            data-on-label="Full-screen OCR"
+                            data-off-label="Crop OCR"
+                        >Full-screen OCR</button>
                     </div>
                     <div id="mask-controls" class="mt-2">
                         <div class="form-check">
                             <input class="form-check-input" type="checkbox" id="maskToggle" disabled>
                             <label class="form-check-label" for="maskToggle">
-                                Use black mask area (full-screen OCR only)
+                                Use black mask area (crop OCR only)
                             </label>
                         </div>
                         <button type="button" id="clearMaskBtn" class="btn btn-outline-secondary btn-sm mt-2" disabled>

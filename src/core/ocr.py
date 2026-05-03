@@ -159,6 +159,9 @@ def serialize_ocr_record(
     frame_rate: float,
     items: list[SpottingItem],
     raw_llm_output: str | None = None,
+    ocr_mode: str | None = None,
+    ocr_area: list[int] | None = None,
+    mask_area: list[int] | None = None,
 ) -> str:
     data: dict[str, Any] = {
         "record_type": "ocr",
@@ -168,7 +171,61 @@ def serialize_ocr_record(
     }
     if raw_llm_output is not None:
         data["raw_llm_output"] = raw_llm_output
+    if ocr_mode is not None:
+        data["ocr_mode"] = ocr_mode
+    if ocr_area is not None:
+        data["ocr_area"] = ocr_area
+    if mask_area is not None:
+        data["mask_area"] = mask_area
     return json.dumps(data, ensure_ascii=False) + "\n"
+
+
+def build_ocr_context(
+    x: int,
+    y: int,
+    width: int,
+    height: int,
+    full_screen_ocr: bool,
+    mask_x: int | None = None,
+    mask_y: int | None = None,
+    mask_width: int | None = None,
+    mask_height: int | None = None,
+) -> dict[str, Any]:
+    has_mask = all(value is not None for value in (mask_x, mask_y, mask_width, mask_height))
+    return {
+        "ocr_mode": "full_screen" if full_screen_ocr else "crop",
+        "ocr_area": [int(x), int(y), int(width), int(height)],
+        "mask_area": (
+            [int(mask_x), int(mask_y), int(mask_width), int(mask_height)]
+            if has_mask
+            else None
+        ),
+    }
+
+
+def is_compatible_ocr_record(record: dict[str, Any], ocr_context: dict[str, Any]) -> bool:
+    record_mode = record.get("ocr_mode")
+    context_mode = ocr_context["ocr_mode"]
+    if record_mode is None:
+        return context_mode == "full_screen"
+    if record_mode != context_mode:
+        return False
+    return (
+        record.get("ocr_area") == ocr_context["ocr_area"] and
+        record.get("mask_area") == ocr_context["mask_area"]
+    )
+
+
+def is_full_screen_ocr_record(record: dict[str, Any]) -> bool:
+    record_mode = record.get("ocr_mode")
+    return record_mode is None or record_mode == "full_screen"
+
+
+def full_frame_text_block(image_width: int, image_height: int) -> ChandraTextBlock:
+    return ChandraTextBlock(
+        normalized_bbox=(0, 0, 1000, 1000),
+        pixel_bbox=(0, 0, max(0, image_width - 1), max(0, image_height - 1)),
+    )
 
 
 def compact_ocr_jsonl(jsonl_path: Path, frame_numbers: Iterable[int]) -> None:
@@ -186,6 +243,9 @@ def compact_ocr_jsonl(jsonl_path: Path, frame_numbers: Iterable[int]) -> None:
             }
             if "raw_llm_output" in record:
                 data["raw_llm_output"] = record["raw_llm_output"]
+            for key in ("ocr_mode", "ocr_area", "mask_area"):
+                if key in record:
+                    data[key] = record[key]
             compact_file.write(json.dumps(data, ensure_ascii=False) + "\n")
     temp_path.replace(jsonl_path)
 
@@ -222,7 +282,12 @@ def is_detector_cache_complete(
         return True
 
     state = load_ocr_jsonl_state(paths.jsonl_path)
-    completed_frame_numbers = set(state.detector_blocks_by_frame) | state.ocr_frame_numbers
+    full_screen_ocr_frame_numbers = {
+        frame_number
+        for frame_number, record in state.ocr_records_by_frame.items()
+        if is_full_screen_ocr_record(record)
+    }
+    completed_frame_numbers = set(state.detector_blocks_by_frame) | full_screen_ocr_frame_numbers
     return required_frame_numbers.issubset(completed_frame_numbers)
 
 # 시간을 포맷팅
@@ -238,8 +303,8 @@ def frame_batch_generator(
     mask_height: int | None = None,
 ) -> Generator[List, None, None]:
     has_mask = all(value is not None for value in (mask_x, mask_y, mask_width, mask_height))
-    if has_mask and not full_screen_ocr:
-        raise ValueError("Mask is only supported when full_screen_ocr is enabled.")
+    if has_mask and full_screen_ocr:
+        raise ValueError("Mask is only supported in crop OCR mode.")
 
     while True:
         # 프레임 읽기
@@ -258,10 +323,12 @@ def frame_batch_generator(
             working_frame = frame[y:y+height, x:x+width]
 
         if has_mask:
-            mask_left = max(mask_x, 0)
-            mask_top = max(mask_y, 0)
-            mask_right = min(mask_left + mask_width, working_frame.shape[1])
-            mask_bottom = min(mask_top + mask_height, working_frame.shape[0])
+            mask_offset_x = 0 if full_screen_ocr else x
+            mask_offset_y = 0 if full_screen_ocr else y
+            mask_left = max(mask_x - mask_offset_x, 0)
+            mask_top = max(mask_y - mask_offset_y, 0)
+            mask_right = min(mask_x + mask_width - mask_offset_x, working_frame.shape[1])
+            mask_bottom = min(mask_y + mask_height - mask_offset_y, working_frame.shape[0])
             if mask_left < mask_right and mask_top < mask_bottom:
                 cv2.rectangle(
                     working_frame,
@@ -287,7 +354,7 @@ async def process_ocr(
     x, y, width, height,
     start_time=0,
     end_time=None,
-    full_screen_ocr=False,
+    full_screen_ocr=True,
     mask_x=None,
     mask_y=None,
     mask_width=None,
@@ -295,13 +362,25 @@ async def process_ocr(
     switch_to_recognizer: Callable[[], Awaitable[bool]] | None = None,
 ):
     has_any_mask_value = any(value is not None for value in (mask_x, mask_y, mask_width, mask_height))
-    if has_any_mask_value and not full_screen_ocr:
-        raise ValueError("Mask is only supported when full_screen_ocr is enabled.")
+    if has_any_mask_value and full_screen_ocr:
+        raise ValueError("Mask is only supported in crop OCR mode.")
+    uses_detector = full_screen_ocr
 
     # 파일 경로 정보 초기화
     paths = get_ocr_paths(video_filename)
     video_path = str(paths.video_path)
     jsonl_path_obj = paths.jsonl_path
+    ocr_context = build_ocr_context(
+        x,
+        y,
+        width,
+        height,
+        full_screen_ocr,
+        mask_x,
+        mask_y,
+        mask_width,
+        mask_height,
+    )
 
     # 영상 정보 추출
     start_frame, end_frame, total_frames, frame_rate = get_ocr_frame_range(video_path, start_time, end_time)
@@ -320,16 +399,27 @@ async def process_ocr(
 
     jsonl_state = load_ocr_jsonl_state(jsonl_path_obj)
     detected_blocks_by_frame = jsonl_state.detector_blocks_by_frame
-    ocr_frame_numbers = jsonl_state.ocr_frame_numbers
+    compatible_ocr_records_by_frame = {
+        frame_number: record
+        for frame_number, record in jsonl_state.ocr_records_by_frame.items()
+        if is_compatible_ocr_record(record, ocr_context)
+    }
+    ocr_frame_numbers = set(compatible_ocr_records_by_frame)
     required_frame_numbers = get_required_frame_numbers(start_frame, end_frame)
-    detector_done_frame_numbers = set(detected_blocks_by_frame) | ocr_frame_numbers
-    processed_detector_frames = len(required_frame_numbers & detector_done_frame_numbers)
-    detector_cache_complete = required_frame_numbers.issubset(detector_done_frame_numbers)
+    recognizer_progress_start = 50.0 if uses_detector else 0.0
+
+    if uses_detector:
+        detector_done_frame_numbers = set(detected_blocks_by_frame) | ocr_frame_numbers
+        processed_detector_frames = len(required_frame_numbers & detector_done_frame_numbers)
+        detector_cache_complete = required_frame_numbers.issubset(detector_done_frame_numbers)
+    else:
+        processed_detector_frames = 0
+        detector_cache_complete = True
 
     pending_detector_tasks: set[asyncio.Task[tuple[int, list[ChandraTextBlock], str | None]]] = set()
-    if detector_cache_complete:
+    if uses_detector and detector_cache_complete:
         yield 50
-    else:
+    elif uses_detector:
         detector_client = ChandraDetectorClient(
             base_url=settings.detector_llm_base_url,
             model=settings.detector_llm_model,
@@ -392,11 +482,11 @@ async def process_ocr(
             if detector_cap.isOpened():
                 detector_cap.release()
 
-    if switch_to_recognizer is not None:
+    if uses_detector and switch_to_recognizer is not None:
         should_continue = await switch_to_recognizer()
         if not should_continue:
             return
-    yield 51
+    yield 51 if uses_detector else 1
 
     # JSONL 파일에 OCR 결과를 저장하면 진행
     recognizer_cap = open_video_at_frame(video_path, start_frame)
@@ -437,12 +527,25 @@ async def process_ocr(
                         break
 
                     spotting_items = [item for item in frame_state.items if item is not None]
-                    jsonl_file.writelines(serialize_ocr_record(frame_number, frame_rate, spotting_items))
+                    jsonl_file.writelines(serialize_ocr_record(
+                        frame_number,
+                        frame_rate,
+                        spotting_items,
+                        ocr_mode=ocr_context["ocr_mode"],
+                        ocr_area=ocr_context["ocr_area"],
+                        mask_area=ocr_context["mask_area"],
+                    ))
                     jsonl_file.flush()
                     ocr_frame_numbers.add(frame_number)
                     processed_recognizer_frames += 1
                     progress_values.append(
-                        phase_progress(processed_recognizer_frames, total_frames, 50.0, 100.0, 99.0)
+                        phase_progress(
+                            processed_recognizer_frames,
+                            total_frames,
+                            recognizer_progress_start,
+                            100.0,
+                            99.0,
+                        )
                     )
                     del recognizer_frame_states[frame_number]
                     next_recognizer_write_index += 1
@@ -462,10 +565,19 @@ async def process_ocr(
                 mask_height=mask_height,
             ):
                 if frame_idx in ocr_frame_numbers:
-                    yield phase_progress(processed_recognizer_frames, total_frames, 50.0, 100.0, 99.0)
+                    yield phase_progress(
+                        processed_recognizer_frames,
+                        total_frames,
+                        recognizer_progress_start,
+                        100.0,
+                        99.0,
+                    )
                     continue
 
-                blocks = detected_blocks_by_frame.get(frame_idx, [])
+                if uses_detector:
+                    blocks = detected_blocks_by_frame.get(frame_idx, [])
+                else:
+                    blocks = [full_frame_text_block(image_width, image_height)]
                 recognizer_frame_order.append(frame_idx)
                 recognizer_frame_states[frame_idx] = RecognizerFrameState(
                     remaining=0,

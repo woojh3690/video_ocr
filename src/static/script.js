@@ -188,12 +188,24 @@ function hasMaskRect() {
     return maskBox.style.display === 'block' && maskBox.offsetWidth >= MIN_MASK_SIZE && maskBox.offsetHeight >= MIN_MASK_SIZE;
 }
 
+function setFullScreenOcrEnabled(enabled) {
+    const isEnabled = Boolean(enabled);
+    const onLabel = fullScreenOcrToggle.dataset.onLabel || 'Full-screen OCR';
+    const offLabel = fullScreenOcrToggle.dataset.offLabel || 'Crop OCR';
+
+    fullScreenOcrToggle.setAttribute('aria-pressed', isEnabled ? 'true' : 'false');
+    fullScreenOcrToggle.classList.toggle('active', isEnabled);
+    fullScreenOcrToggle.classList.toggle('btn-primary', isEnabled);
+    fullScreenOcrToggle.classList.toggle('btn-outline-primary', !isEnabled);
+    fullScreenOcrToggle.textContent = isEnabled ? onLabel : offLabel;
+}
+
 function isFullScreenOcrEnabled() {
-    return Boolean(fullScreenOcrToggle.checked);
+    return fullScreenOcrToggle.getAttribute('aria-pressed') === 'true';
 }
 
 function isMaskDrawingEnabled() {
-    return isFullScreenOcrEnabled() && Boolean(maskToggle.checked);
+    return !isFullScreenOcrEnabled() && Boolean(maskToggle.checked);
 }
 
 function updateBoundingBoxInteraction() {
@@ -209,9 +221,11 @@ function updateBoundingBoxInteraction() {
 
 function updateMaskControls() {
     const fullScreenEnabled = isFullScreenOcrEnabled();
+    const cropEnabled = !fullScreenEnabled;
 
-    maskToggle.disabled = !fullScreenEnabled;
-    if (!fullScreenEnabled) {
+    maskControls.style.display = cropEnabled ? 'block' : 'none';
+    maskToggle.disabled = !cropEnabled;
+    if (!cropEnabled) {
         maskToggle.checked = false;
         clearMaskBox();
     }
@@ -220,7 +234,7 @@ function updateMaskControls() {
     clearMaskBtn.disabled = !drawingEnabled;
 
     videoContainer.classList.toggle('mask-draw-enabled', drawingEnabled);
-    maskControls.classList.toggle('mask-disabled', !fullScreenEnabled);
+    maskControls.classList.toggle('mask-disabled', !cropEnabled);
 
     if (!drawingEnabled) {
         maskDrawing = false;
@@ -487,7 +501,7 @@ function switchToOcrCreationView() {
     videoContainer.style.display = 'none';
     vfilename = null;
 
-    fullScreenOcrToggle.checked = false;
+    setFullScreenOcrEnabled(true);
     maskToggle.checked = false;
     clearMaskBox();
     updateBoundingBoxInteraction();
@@ -514,7 +528,8 @@ stopAllBtn.addEventListener('click', () => {
 });
 
 // 이벤트: 전체 화면 OCR 토글 변경
-fullScreenOcrToggle.addEventListener('change', () => {
+fullScreenOcrToggle.addEventListener('click', () => {
+    setFullScreenOcrEnabled(!isFullScreenOcrEnabled());
     updateBoundingBoxInteraction();
     updateMaskControls();
 });
@@ -761,10 +776,19 @@ startOcrBtn.addEventListener('click', async () => {
         formData.append('end_time', String(endTime));
     }
 
-    if (fullScreenOcr && maskToggle.checked) {
+    if (!fullScreenOcr && maskToggle.checked) {
         const maskRect = getMaskBoxInSourcePixels(scaleX, scaleY);
         if (!maskRect || maskRect.width <= 0 || maskRect.height <= 0) {
             alert('Mask is enabled, but no mask area was selected. Drag on video to set the area.');
+            return;
+        }
+        if (
+            maskRect.x < x ||
+            maskRect.y < y ||
+            maskRect.x + maskRect.width > x + width ||
+            maskRect.y + maskRect.height > y + height
+        ) {
+            alert('Mask area must stay inside the selected crop area.');
             return;
         }
 
@@ -798,5 +822,6 @@ startOcrBtn.addEventListener('click', async () => {
     }
 });
 
+setFullScreenOcrEnabled(isFullScreenOcrEnabled());
 updateBoundingBoxInteraction();
 updateMaskControls();

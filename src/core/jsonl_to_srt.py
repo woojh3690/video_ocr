@@ -25,6 +25,7 @@ class FrameInfo:
     frame_idx: int
     timestamp_sec: float
     spotting_items: List[SpottingItem]
+    ocr_mode: str | None = None
     track_ids: list[int] = field(default_factory=list)
 
 
@@ -354,6 +355,7 @@ def jsonl_to_srt(jsonl_path_obj: Path, visualize=False):
                 frame_idx=frame_idx,
                 timestamp_sec=timestamp_sec,
                 spotting_items=spotting_items,
+                ocr_mode=ocr_res_json.get("ocr_mode"),
             ))
 
     # 글자(유니코드 Letter) 개수가 1 이하인 OCR 결과 제거
@@ -377,6 +379,137 @@ def jsonl_to_srt(jsonl_path_obj: Path, visualize=False):
             return ""
         text = unicodedata.normalize("NFKC", text).casefold()
         return "".join(ch for ch in text if ch.isalnum())
+
+    def is_direct_crop_tracking_result() -> bool:
+        crop_mode_frames = [frame_info for frame_info in ocr_results if frame_info.ocr_mode == "crop"]
+        if not crop_mode_frames:
+            return False
+        for frame_info in ocr_results:
+            if frame_info.ocr_mode != "crop" or len(frame_info.spotting_items) > 1:
+                return False
+            if frame_info.spotting_items and frame_info.spotting_items[0].bbox != (0, 0, 1000, 1000):
+                return False
+        return True
+
+    def assign_direct_crop_track_ids() -> None:
+        next_track_id = 1
+        current_track_id: int | None = None
+        current_norm_text = ""
+        previous_frame_idx: int | None = None
+        max_gap_frames = 6
+        same_text_threshold = 0.86
+
+        for frame_info in ocr_results:
+            if not frame_info.spotting_items:
+                frame_info.track_ids = []
+                current_track_id = None
+                current_norm_text = ""
+                previous_frame_idx = frame_info.frame_idx
+                continue
+
+            text = frame_info.spotting_items[0].text
+            norm_text = filtering_only_text(text)
+            if not norm_text:
+                frame_info.track_ids = []
+                current_track_id = None
+                current_norm_text = ""
+                previous_frame_idx = frame_info.frame_idx
+                continue
+
+            has_frame_gap = (
+                previous_frame_idx is not None and
+                frame_info.frame_idx - previous_frame_idx > max_gap_frames
+            )
+            text_similarity = (
+                SequenceMatcher(None, norm_text, current_norm_text).ratio()
+                if current_norm_text
+                else 0.0
+            )
+            if current_track_id is None or has_frame_gap or text_similarity < same_text_threshold:
+                current_track_id = next_track_id
+                next_track_id += 1
+
+            frame_info.track_ids = [current_track_id]
+            current_norm_text = norm_text
+            previous_frame_idx = frame_info.frame_idx
+
+    def to_direct_srt_timestamp(seconds: float) -> str:
+        if seconds < 0:
+            seconds = 0.0
+        total_ms = int(round(seconds * 1000.0))
+        ms = total_ms % 1000
+        total_seconds = total_ms // 1000
+        s = total_seconds % 60
+        total_minutes = total_seconds // 60
+        m = total_minutes % 60
+        h = total_minutes // 60
+        return f"{h:02d}:{m:02d}:{s:02d},{ms:03d}"
+
+    def write_direct_crop_segments(segments: list[Segment]) -> None:
+        segments.sort(key=lambda seg: (seg.start, seg.end, seg.text))
+        segments = [seg for seg in segments if seg.end >= seg.start]
+        for i, seg in enumerate(segments, start=1):
+            seg.index = i
+
+        langs: List[str] = []
+        sample_size = min(100, len(segments))
+        for seg in random.sample(segments, sample_size):
+            try:
+                langs.append(detect(seg.text))
+            except LangDetectException:
+                continue
+        most_common_lang = Counter(langs).most_common(1)[0][0] if langs else "un"
+        srt_path = jsonl_path_obj.with_suffix(f".{most_common_lang}.srt")
+
+        with srt_path.open("w", encoding="utf-8", newline="\n") as handle:
+            first = True
+            for seg in segments:
+                if not first:
+                    handle.write("\n")
+                first = False
+                handle.write(f"{seg.index}\n")
+                handle.write(f"{to_direct_srt_timestamp(seg.start)} --> {to_direct_srt_timestamp(seg.end)}\n")
+                handle.write(f"{seg.text}\n")
+
+    def build_direct_crop_segments() -> list[Segment]:
+        assign_direct_crop_track_ids()
+        track_frame_counts: dict[int, int] = defaultdict(int)
+        track_text_counts: dict[int, Counter[str]] = defaultdict(Counter)
+        track_start: dict[int, float] = {}
+        track_end: dict[int, float] = {}
+
+        for frame_info in ocr_results:
+            if not frame_info.track_ids or not frame_info.spotting_items:
+                continue
+            track_id = frame_info.track_ids[0]
+            text = frame_info.spotting_items[0].text
+            track_frame_counts[track_id] += 1
+            track_text_counts[track_id][text] += 1
+            if track_id not in track_start or frame_info.timestamp_sec < track_start[track_id]:
+                track_start[track_id] = frame_info.timestamp_sec
+            if track_id not in track_end or frame_info.timestamp_sec > track_end[track_id]:
+                track_end[track_id] = frame_info.timestamp_sec
+
+        segments: list[Segment] = []
+        for track_id, frame_count in track_frame_counts.items():
+            if frame_count < 3:
+                continue
+            text_counter = track_text_counts.get(track_id)
+            if not text_counter:
+                continue
+            segments.append(
+                Segment(
+                    index=0,
+                    start=float(track_start[track_id]),
+                    end=float(track_end[track_id]),
+                    text=text_counter.most_common(1)[0][0],
+                )
+            )
+        return segments
+
+    if is_direct_crop_tracking_result():
+        write_direct_crop_segments(build_direct_crop_segments())
+        return
 
     def box_from_points(points: np.ndarray) -> tuple[float, float, float, float]:
         x1 = float(min(points[0][0], points[1][0]))
