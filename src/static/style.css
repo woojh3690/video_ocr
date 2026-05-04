@@ -302,8 +302,117 @@ body.settings-page {
     border-style: solid;
 }
 
-.ocr-mode-toggle {
-    min-width: 150px;
+/* OCR 모드 토글 스위치 스타일 */
+.ocr-mode-control {
+    display: flex;
+    justify-content: flex-end;
+    align-items: center;
+    min-height: 38px;
+}
+
+.ocr-switch-row {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    column-gap: .5rem;
+    min-height: 36px;
+    padding: .35rem .75rem;
+    border: 1px solid #dee2e6;
+    border-radius: 999px;
+    background-color: #f8f9fa;
+    line-height: 1;
+    white-space: nowrap;
+}
+
+.ocr-switch {
+    position: relative;
+    display: inline-block;
+    width: 48px;
+    height: 26px;
+    margin: 0;
+    flex: 0 0 48px;
+    vertical-align: middle;
+}
+
+.ocr-switch input {
+    opacity: 0;
+    width: 0;
+    height: 0;
+}
+
+.ocr-switch-slider {
+    position: absolute;
+    cursor: pointer;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    background-color: #adb5bd;
+    transition: .3s;
+    border-radius: 26px;
+}
+
+.ocr-switch-slider:before {
+    position: absolute;
+    content: "";
+    height: 20px;
+    width: 20px;
+    left: 3px;
+    top: 3px;
+    background-color: #ffffff;
+    transition: .3s;
+    border-radius: 50%;
+    box-shadow: 0 1px 3px rgba(0, 0, 0, .25);
+}
+
+.ocr-switch input:checked + .ocr-switch-slider {
+    background-color: #0d6efd;
+}
+
+.ocr-switch input:checked + .ocr-switch-slider:before {
+    transform: translateX(22px);
+}
+
+.ocr-switch input:focus + .ocr-switch-slider {
+    box-shadow: 0 0 0 .2rem rgba(13, 110, 253, .20);
+}
+
+.ocr-switch-label {
+    display: inline-flex;
+    align-items: center;
+    margin: 0;
+    font-size: 0.875rem;
+    line-height: 1;
+    color: #495057;
+    user-select: none;
+}
+
+@media (max-width: 767.98px) {
+    .ocr-mode-control {
+        justify-content: flex-start;
+        margin-top: 1rem !important;
+    }
+
+    .ocr-switch-row {
+        width: 100%;
+        justify-content: space-between;
+    }
+}
+
+
+@media (prefers-color-scheme: dark) {
+    .ocr-switch-row {
+        background-color: #1a1d24;
+        border-color: #2c3242;
+    }
+
+    .ocr-switch-label {
+        color: #d8deec;
+    }
+
+    .ocr-switch-slider {
+        background-color: #3a3f4f;
+    }
 }
 
 #mask-box {

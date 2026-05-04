@@ -189,19 +189,11 @@ function hasMaskRect() {
 }
 
 function setFullScreenOcrEnabled(enabled) {
-    const isEnabled = Boolean(enabled);
-    const onLabel = fullScreenOcrToggle.dataset.onLabel || 'Full-screen OCR';
-    const offLabel = fullScreenOcrToggle.dataset.offLabel || 'Crop OCR';
-
-    fullScreenOcrToggle.setAttribute('aria-pressed', isEnabled ? 'true' : 'false');
-    fullScreenOcrToggle.classList.toggle('active', isEnabled);
-    fullScreenOcrToggle.classList.toggle('btn-primary', isEnabled);
-    fullScreenOcrToggle.classList.toggle('btn-outline-primary', !isEnabled);
-    fullScreenOcrToggle.textContent = isEnabled ? onLabel : offLabel;
+    fullScreenOcrToggle.checked = Boolean(enabled);
 }
 
 function isFullScreenOcrEnabled() {
-    return fullScreenOcrToggle.getAttribute('aria-pressed') === 'true';
+    return fullScreenOcrToggle.checked;
 }
 
 function isMaskDrawingEnabled() {
@@ -528,8 +520,7 @@ stopAllBtn.addEventListener('click', () => {
 });
 
 // 이벤트: 전체 화면 OCR 토글 변경
-fullScreenOcrToggle.addEventListener('click', () => {
-    setFullScreenOcrEnabled(!isFullScreenOcrEnabled());
+fullScreenOcrToggle.addEventListener('change', () => {
     updateBoundingBoxInteraction();
     updateMaskControls();
 });

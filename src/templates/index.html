@@ -68,15 +68,15 @@
                     <input type="text" id="endTimeInput" placeholder="mm:ss" value="00:00" class="form-control">
                 </div>
                 <div class="col-md-8">
-                    <div class="mt-4">
-                        <button
-                            type="button"
-                            id="fullScreenOcrToggle"
-                            class="btn btn-primary ocr-mode-toggle active"
-                            aria-pressed="true"
-                            data-on-label="Full-screen OCR"
-                            data-off-label="Crop OCR"
-                        >Full-screen OCR</button>
+                    <div class="ocr-mode-control mt-4">
+                        <div class="ocr-switch-row" role="group" aria-label="OCR mode selector">
+                            <span class="ocr-switch-label">Crop OCR</span>
+                            <label class="ocr-switch" for="fullScreenOcrToggle" aria-label="Toggle full-screen OCR mode">
+                                <input type="checkbox" id="fullScreenOcrToggle" checked>
+                                <span class="ocr-switch-slider"></span>
+                            </label>
+                            <span class="ocr-switch-label">Full-screen OCR</span>
+                        </div>
                     </div>
                     <div id="mask-controls" class="mt-2">
                         <div class="form-check">
