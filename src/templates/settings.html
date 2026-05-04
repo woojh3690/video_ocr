@@ -32,15 +32,15 @@
                 <small class="form-text text-muted mb-3">
                     켜면 OCR 작업 중 Detector와 Recognizer 컨테이너를 순차적으로 시작하고, 대기 작업이 없으면 자동으로 중지합니다.
                 </small>
-                <div class="form-row align-items-end docker-url-row">
-                    <div class="form-group col-md-8">
-                        <label for="docker-url">Docker 데몬 엔드포인트</label>
+                <div class="form-group docker-url-row">
+                    <label for="docker-url">Docker 데몬 엔드포인트</label>
+                    <div class="input-group docker-url-input-group">
                         <input type="text" id="docker-url" class="form-control docker-control" placeholder="예: tcp://127.0.0.1:2375" required>
-                        <small class="form-text text-muted">형식: tcp://&lt;host&gt;:&lt;port&gt;</small>
+                        <div class="input-group-append docker-refresh-group">
+                            <button type="button" class="btn btn-outline-secondary" id="refresh-docker-list">목록 새로고침</button>
+                        </div>
                     </div>
-                    <div class="form-group col-md-4 docker-refresh-group">
-                        <button type="button" class="btn btn-outline-secondary" id="refresh-docker-list">목록 새로고침</button>
-                    </div>
+                    <small class="form-text text-muted">형식: tcp://&lt;host&gt;:&lt;port&gt;</small>
                 </div>
             </section>
 

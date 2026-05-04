@@ -252,12 +252,6 @@ body.settings-page {
     align-items: flex-start;
 }
 
-.docker-refresh-group {
-    display: flex;
-    align-items: flex-start;
-    padding-top: 1.95rem;
-}
-
 #refresh-docker-list {
     margin-top: 0;
     width: auto;
@@ -428,3 +422,61 @@ body.settings-page {
 #mask-controls.mask-disabled {
     opacity: 0.6;
 }
+
+/* UI alignment fixes: OCR mode toggle and Docker refresh input group */
+.docker-url-row {
+    margin-bottom: 1rem;
+}
+
+.docker-url-input-group {
+    display: flex;
+    align-items: stretch;
+    gap: .75rem;
+}
+
+.docker-url-input-group .form-control {
+    height: calc(1.5em + .75rem + 2px);
+    border-radius: .25rem !important;
+}
+
+.docker-url-input-group .input-group-append {
+    display: flex;
+    align-items: stretch;
+    margin-left: 0;
+}
+
+.docker-url-input-group .btn {
+    height: calc(1.5em + .75rem + 2px);
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    margin: 0;
+    white-space: nowrap;
+    border-radius: .25rem !important;
+}
+
+.docker-refresh-group {
+    display: flex;
+    align-items: stretch;
+    padding-top: 0;
+}
+
+#refresh-docker-list {
+    width: auto;
+    min-width: 8.5rem;
+    margin-top: 0;
+}
+
+@media (max-width: 767.98px) {
+    .docker-url-input-group {
+        flex-direction: column;
+        gap: .5rem;
+    }
+
+    .docker-url-input-group .form-control,
+    .docker-url-input-group .btn,
+    .docker-url-input-group .input-group-append {
+        width: 100%;
+    }
+}
+/* End UI alignment fixes */
