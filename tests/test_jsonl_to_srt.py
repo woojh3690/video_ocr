@@ -6,7 +6,12 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent / "src"))
 
-from core.jsonl_to_srt import Segment, _merge_nearby_identical_segments, jsonl_to_srt
+from core.jsonl_to_srt import (
+    Segment,
+    _filter_short_segments,
+    _merge_nearby_identical_segments,
+    jsonl_to_srt,
+)
 from core.ocr_types import SpottingItem, TEXT_STATUS_TRUNCATED
 
 
@@ -60,15 +65,27 @@ class JsonlToSrtTests(unittest.TestCase):
 
         self.assertEqual(len(merged_segments), 2)
 
+    def test_segments_at_or_below_half_second_are_filtered(self):
+        segments = [
+            Segment(index=0, start=0.0, end=0.5, text="too short subtitle"),
+            Segment(index=0, start=1.0, end=1.49, text="also too short subtitle"),
+            Segment(index=0, start=2.0, end=2.51, text="long enough subtitle"),
+        ]
+
+        filtered_segments = _filter_short_segments(segments)
+
+        self.assertEqual(len(filtered_segments), 1)
+        self.assertEqual(filtered_segments[0].text, "long enough subtitle")
+
     def test_direct_crop_mode_tracks_contiguous_text_changes(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             jsonl_path = Path(temp_dir) / "direct.jsonl"
             records = [
                 make_direct_crop_record(frame_number, "hello world")
-                for frame_number in range(1, 6)
+                for frame_number in range(1, 8)
             ] + [
                 make_direct_crop_record(frame_number, "goodbye world")
-                for frame_number in range(6, 11)
+                for frame_number in range(8, 15)
             ]
             with jsonl_path.open("w", encoding="utf-8") as jsonl_file:
                 for record in records:
@@ -133,7 +150,7 @@ class JsonlToSrtTests(unittest.TestCase):
             record = make_direct_crop_record(1, "legacy text")
             del record["spotting_items"][0]["text_status"]
             with jsonl_path.open("w", encoding="utf-8") as jsonl_file:
-                for frame_number in range(1, 5):
+                for frame_number in range(1, 8):
                     record["frame_number"] = frame_number
                     record["time"] = round(frame_number / 10, 3)
                     jsonl_file.write(json.dumps(record, ensure_ascii=False) + "\n")

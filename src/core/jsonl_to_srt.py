@@ -57,6 +57,11 @@ def _merge_nearby_identical_segments(segments: list[Segment], max_gap_sec: float
     return merged_segments
 
 
+def _filter_short_segments(segments: list[Segment], min_duration_sec: float = 0.5) -> list[Segment]:
+    # 병합 후에도 너무 짧게 남은 세그먼트는 자막 노이즈로 보고 제거합니다.
+    return [seg for seg in segments if seg.end - seg.start > min_duration_sec]
+
+
 def fine_video(jsonl_path_obj: Path) -> Path:
     for file in jsonl_path_obj.parent.iterdir():
         if file.stem == jsonl_path_obj.stem and file.suffix not in [".jsonl", ".srt"]:
@@ -487,6 +492,7 @@ def jsonl_to_srt(jsonl_path_obj: Path, visualize=False):
         segments.sort(key=lambda seg: (seg.start, seg.end, seg.text))
         segments = _merge_nearby_identical_segments(segments)
         segments = [seg for seg in segments if seg.end >= seg.start]
+        segments = _filter_short_segments(segments)
         for i, seg in enumerate(segments, start=1):
             seg.index = i
 
@@ -816,6 +822,7 @@ def jsonl_to_srt(jsonl_path_obj: Path, visualize=False):
 
     # end < start 인 세그먼트 제거
     segments = [seg for seg in segments if seg.end >= seg.start]
+    segments = _filter_short_segments(segments)
     for i, seg in enumerate(segments, start=1):
         seg.index = i
 
