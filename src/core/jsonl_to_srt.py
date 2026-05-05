@@ -37,6 +37,26 @@ class Segment:
     text: str
 
 
+def _merge_nearby_identical_segments(segments: list[Segment], max_gap_sec: float = 1.0) -> list[Segment]:
+    # 시작 시각 기준으로 정렬된 최종 세그먼트 중 같은 텍스트가 1초 이내로 이어지면 하나로 합칩니다.
+    merged_segments: list[Segment] = []
+    for seg in sorted(segments, key=lambda item: (item.start, item.end, item.text)):
+        if not merged_segments:
+            merged_segments.append(seg)
+            continue
+
+        previous = merged_segments[-1]
+        gap_sec = seg.start - previous.end
+        if previous.text == seg.text and gap_sec <= max_gap_sec:
+            previous.end = max(previous.end, seg.end)
+            previous.start = min(previous.start, seg.start)
+            continue
+
+        merged_segments.append(seg)
+
+    return merged_segments
+
+
 def fine_video(jsonl_path_obj: Path) -> Path:
     for file in jsonl_path_obj.parent.iterdir():
         if file.stem == jsonl_path_obj.stem and file.suffix not in [".jsonl", ".srt"]:
@@ -465,6 +485,7 @@ def jsonl_to_srt(jsonl_path_obj: Path, visualize=False):
 
     def write_direct_crop_segments(segments: list[Segment]) -> None:
         segments.sort(key=lambda seg: (seg.start, seg.end, seg.text))
+        segments = _merge_nearby_identical_segments(segments)
         segments = [seg for seg in segments if seg.end >= seg.start]
         for i, seg in enumerate(segments, start=1):
             seg.index = i
@@ -791,7 +812,7 @@ def jsonl_to_srt(jsonl_path_obj: Path, visualize=False):
 
     # 처리 로직 주석
     segments.sort(key=lambda seg: (seg.start, seg.end, seg.text))
-
+    segments = _merge_nearby_identical_segments(segments)
 
     # end < start 인 세그먼트 제거
     segments = [seg for seg in segments if seg.end >= seg.start]

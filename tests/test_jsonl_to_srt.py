@@ -6,7 +6,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent / "src"))
 
-from core.jsonl_to_srt import jsonl_to_srt
+from core.jsonl_to_srt import Segment, _merge_nearby_identical_segments, jsonl_to_srt
 from core.ocr_types import SpottingItem, TEXT_STATUS_TRUNCATED
 
 
@@ -35,6 +35,31 @@ def make_full_screen_record(frame_number: int, items: list[SpottingItem]) -> dic
 
 
 class JsonlToSrtTests(unittest.TestCase):
+    def test_nearby_identical_segments_are_merged(self):
+        segments = [
+            Segment(index=0, start=0.0, end=1.0, text="same subtitle"),
+            Segment(index=0, start=1.9, end=3.0, text="same subtitle"),
+            Segment(index=0, start=4.2, end=5.0, text="same subtitle"),
+            Segment(index=0, start=5.5, end=6.0, text="different subtitle"),
+        ]
+
+        merged_segments = _merge_nearby_identical_segments(segments)
+
+        self.assertEqual(len(merged_segments), 3)
+        self.assertEqual(merged_segments[0].text, "same subtitle")
+        self.assertEqual(merged_segments[0].start, 0.0)
+        self.assertEqual(merged_segments[0].end, 3.0)
+
+    def test_nearby_segments_with_different_text_are_not_merged(self):
+        segments = [
+            Segment(index=0, start=0.0, end=1.0, text="first subtitle"),
+            Segment(index=0, start=1.5, end=2.0, text="second subtitle"),
+        ]
+
+        merged_segments = _merge_nearby_identical_segments(segments)
+
+        self.assertEqual(len(merged_segments), 2)
+
     def test_direct_crop_mode_tracks_contiguous_text_changes(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             jsonl_path = Path(temp_dir) / "direct.jsonl"
