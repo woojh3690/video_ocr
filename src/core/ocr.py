@@ -303,8 +303,8 @@ def frame_batch_generator(
     mask_height: int | None = None,
 ) -> Generator[List, None, None]:
     has_mask = all(value is not None for value in (mask_x, mask_y, mask_width, mask_height))
-    if has_mask and full_screen_ocr:
-        raise ValueError("Mask is only supported in crop OCR mode.")
+    if has_mask and not full_screen_ocr:
+        raise ValueError("마스킹은 Full-screen OCR에서만 사용할 수 있습니다.")
 
     while True:
         # 프레임 읽기
@@ -322,9 +322,10 @@ def frame_batch_generator(
         else:
             working_frame = frame[y:y+height, x:x+width]
 
+        # Full-screen OCR에서 제외할 영역을 검은색으로 덮습니다.
         if has_mask:
-            mask_offset_x = 0 if full_screen_ocr else x
-            mask_offset_y = 0 if full_screen_ocr else y
+            mask_offset_x = 0
+            mask_offset_y = 0
             mask_left = max(mask_x - mask_offset_x, 0)
             mask_top = max(mask_y - mask_offset_y, 0)
             mask_right = min(mask_x + mask_width - mask_offset_x, working_frame.shape[1])
@@ -362,8 +363,8 @@ async def process_ocr(
     switch_to_recognizer: Callable[[], Awaitable[bool]] | None = None,
 ):
     has_any_mask_value = any(value is not None for value in (mask_x, mask_y, mask_width, mask_height))
-    if has_any_mask_value and full_screen_ocr:
-        raise ValueError("Mask is only supported in crop OCR mode.")
+    if has_any_mask_value and not full_screen_ocr:
+        raise ValueError("마스킹는 Full-screen OCR에서만 사용할 수 있습니다.")
     uses_detector = full_screen_ocr
 
     # 파일 경로 정보 초기화

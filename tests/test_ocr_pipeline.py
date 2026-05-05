@@ -292,6 +292,65 @@ class OcrPipelineTests(unittest.IsolatedAsyncioTestCase):
             all(record["spotting_items"][0]["quad"] == expected_quad for record in final_records)
         )
 
+    async def test_full_screen_mask_blacks_out_detector_frame_and_context(self):
+        masked_pixels = []
+
+        class FakeDetector:
+            def __init__(self, *args, **kwargs):
+                pass
+
+            async def detect(self, frame_idx, frame):
+                masked_pixels.append(frame[4, 4].tolist())
+                return frame_idx, [], None
+
+        class FakeRecognizer:
+            def __init__(self, *args, **kwargs):
+                pass
+
+            async def recognize(self, frame_idx, crop):
+                return ""
+
+        await self._run_pipeline(
+            FakeDetector,
+            FakeRecognizer,
+            full_screen_ocr=True,
+            mask_x=2,
+            mask_y=2,
+            mask_width=8,
+            mask_height=8,
+        )
+
+        self.assertTrue(masked_pixels)
+        self.assertTrue(all(pixel == [0, 0, 0] for pixel in masked_pixels))
+
+        final_records = [
+            json.loads(line)
+            for line in self.jsonl_path.read_text(encoding="utf-8").splitlines()
+        ]
+        self.assertTrue(final_records)
+        self.assertTrue(all(record["ocr_mode"] == "full_screen" for record in final_records))
+        self.assertTrue(all(record["mask_area"] == [2, 2, 8, 8] for record in final_records))
+
+    async def test_crop_mode_rejects_mask(self):
+        class DetectorMustNotRun:
+            def __init__(self, *args, **kwargs):
+                raise AssertionError("detector should be skipped")
+
+        class RecognizerMustNotRun:
+            def __init__(self, *args, **kwargs):
+                raise AssertionError("recognizer should be skipped")
+
+        with self.assertRaisesRegex(ValueError, "Full-screen OCR"):
+            await self._run_pipeline(
+                DetectorMustNotRun,
+                RecognizerMustNotRun,
+                full_screen_ocr=False,
+                mask_x=2,
+                mask_y=2,
+                mask_width=8,
+                mask_height=8,
+            )
+
 
 if __name__ == "__main__":
     unittest.main()

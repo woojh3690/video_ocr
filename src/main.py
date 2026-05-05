@@ -565,26 +565,26 @@ async def start_ocr_endpoint(
     has_any_mask_value = any(value is not None for value in (mask_x, mask_y, mask_width, mask_height))
     has_all_mask_values = all(value is not None for value in (mask_x, mask_y, mask_width, mask_height))
     if has_any_mask_value and not has_all_mask_values:
-        raise HTTPException(status_code=400, detail="Mask coordinates must include x, y, width, and height.")
+        raise HTTPException(status_code=400, detail="마스킹 좌표는 x, y, width, height를 모두 포함해야 합니다.")
 
     has_mask = has_all_mask_values
-    if has_mask and full_screen_ocr:
-        raise HTTPException(status_code=400, detail="Mask is only supported in crop OCR mode.")
+    if has_mask and not full_screen_ocr:
+        raise HTTPException(status_code=400, detail="마스킹는 Full-screen OCR에서만 사용할 수 있습니다.")
 
     if has_mask:
         if mask_width <= 0 or mask_height <= 0:
-            raise HTTPException(status_code=400, detail="Mask width and height must be greater than 0.")
+            raise HTTPException(status_code=400, detail="마스킹의 너비와 높이는 0보다 커야 합니다.")
         if mask_x < 0 or mask_y < 0:
-            raise HTTPException(status_code=400, detail="Mask x and y must be greater than or equal to 0.")
+            raise HTTPException(status_code=400, detail="마스킹의 x와 y는 0 이상이어야 합니다.")
         if mask_x + mask_width > frame_width or mask_y + mask_height > frame_height:
-            raise HTTPException(status_code=400, detail="Mask area must stay within the video frame.")
+            raise HTTPException(status_code=400, detail="마스킹 영역은 영상 범위 안에 있어야 합니다.")
         if (
             mask_x < x or
             mask_y < y or
             mask_x + mask_width > x + width or
             mask_y + mask_height > y + height
         ):
-            raise HTTPException(status_code=400, detail="Mask area must stay within the OCR crop area.")
+            raise HTTPException(status_code=400, detail="마스킹 영역은 OCR 영역 안에 있어야 합니다.")
 
     task_id = str(uuid.uuid4())
     tasks[task_id] = Task(

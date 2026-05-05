@@ -4,7 +4,7 @@
     <title>Video OCR</title>
     <link id="favicon" rel="icon" type="image/x-icon" href="static/favicon.ico">
     <link rel="stylesheet" href="https://stackpath.bootstrapcdn.com/bootstrap/4.5.0/css/bootstrap.min.css">
-    <link rel="stylesheet" href="/static/style.css">
+    <link rel="stylesheet" href="/static/style.css?v=mask-layout-4">
 </head>
 <body>
     <div class="container mt-5">
@@ -58,46 +58,67 @@
                     </div>
                 </div>
             </div>
-            <div class="row mt-4">
-                <div class="col-md-2">
-                    <label for="startTimeInput">OCR 시작 시간 (초):</label>
-                    <input type="text" id="startTimeInput" placeholder="mm:ss" value="00:00" class="form-control">
-                </div>
-                <div class="col-md-2">
-                    <label for="endTimeInput">OCR 종료 시간 (초):</label>
-                    <input type="text" id="endTimeInput" placeholder="mm:ss" value="00:00" class="form-control">
-                </div>
-                <div class="col-md-8">
-                    <div class="ocr-mode-control mt-4">
-                        <div class="ocr-switch-row" role="group" aria-label="OCR mode selector">
-                            <span class="ocr-switch-label">Crop OCR</span>
-                            <label class="ocr-switch" for="fullScreenOcrToggle" aria-label="Toggle full-screen OCR mode">
-                                <input type="checkbox" id="fullScreenOcrToggle" checked>
-                                <span class="ocr-switch-slider"></span>
-                            </label>
-                            <span class="ocr-switch-label">Full-screen OCR</span>
+            <div class="ocr-control-grid mt-4">
+                <div class="time-controls">
+                    <div class="time-field">
+                        <label for="startTimeInput">OCR 시작 시간 (초):</label>
+                        <div class="time-input-shell">
+                            <input type="text" id="startTimeInput" placeholder="mm:ss" value="00:00" class="form-control">
+                            <span class="time-icon" aria-hidden="true">
+                                <svg viewBox="0 0 24 24" focusable="false">
+                                    <circle cx="12" cy="12" r="9"></circle>
+                                    <path d="M12 7v5l3 2"></path>
+                                </svg>
+                            </span>
                         </div>
                     </div>
-                    <div id="mask-controls" class="mt-2">
-                        <div class="form-check">
-                            <input class="form-check-input" type="checkbox" id="maskToggle" disabled>
-                            <label class="form-check-label" for="maskToggle">
-                                Use black mask area (crop OCR only)
-                            </label>
+                    <div class="time-field">
+                        <label for="endTimeInput">OCR 종료 시간 (초):</label>
+                        <div class="time-input-shell">
+                            <input type="text" id="endTimeInput" placeholder="mm:ss" value="00:00" class="form-control">
+                            <span class="time-icon" aria-hidden="true">
+                                <svg viewBox="0 0 24 24" focusable="false">
+                                    <circle cx="12" cy="12" r="9"></circle>
+                                    <path d="M12 7v5l3 2"></path>
+                                </svg>
+                            </span>
                         </div>
-                        <button type="button" id="clearMaskBtn" class="btn btn-outline-secondary btn-sm mt-2" disabled>
-                            Clear mask area
-                        </button>
-                        <small id="maskHelpText" class="form-text text-muted">
-                            Enable mask and drag on video to create one black mask rectangle.
-                        </small>
                     </div>
+                </div>
+                <div class="ocr-mode-control">
+                    <div class="ocr-segmented" role="group" aria-label="OCR mode selector">
+                        <input type="checkbox" id="fullScreenOcrToggle" class="ocr-mode-input" checked>
+                        <button type="button" id="cropOcrModeBtn" class="ocr-segment-button">Crop OCR</button>
+                        <button type="button" id="fullScreenOcrModeBtn" class="ocr-segment-button active">Full-screen OCR</button>
+                    </div>
+                </div>
+                <div id="mask-controls" class="mask-panel">
+                    <label class="mask-switch-control" for="maskToggle">
+                        <input class="form-check-input" type="checkbox" id="maskToggle">
+                        <span class="mask-switch-slider" aria-hidden="true"></span>
+                        <span class="mask-switch-label">마스킹 사용</span>
+                    </label>
+                    <span class="mask-divider" aria-hidden="true"></span>
+                    <div id="maskHelpText" class="mask-help">
+                        <span class="mask-info-icon" aria-hidden="true">i</span>
+                        <span>가릴 영역을 마스크로 지정</span>
+                    </div>
+                    <button type="button" id="clearMaskBtn" class="mask-clear-button" disabled>
+                        <span class="mask-clear-icon" aria-hidden="true">
+                            <svg viewBox="0 0 24 24" focusable="false">
+                                <path d="M16 3 3 16l5 5 13-13-5-5Z"></path>
+                                <path d="m14 5 5 5"></path>
+                                <path d="M4 21h8"></path>
+                            </svg>
+                        </span>
+                        <span>마스크 초기화</span>
+                    </button>
                 </div>
             </div>
             <div class="row mt-4 mb-4">
-                <div class="col-md-12">
-                    <button id="back-to-list-btn" class="btn btn-secondary float-left">작업 큐로 돌아가기</button>
-                    <button id="start-ocr-btn" class="btn btn-success float-right">OCR 시작</button>
+                <div class="col-md-12 ocr-action-row">
+                    <button id="back-to-list-btn" class="btn btn-secondary">작업 큐로 돌아가기</button>
+                    <button id="start-ocr-btn" class="btn btn-success">OCR 시작</button>
                 </div>
             </div>
         </div>
