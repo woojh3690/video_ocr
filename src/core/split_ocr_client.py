@@ -136,7 +136,7 @@ class PaddleOCRRecognizerClient(OpenAIVisionClient):
     ) -> str:
         try:
             extra_body={ "repetition_penalty": 1.03 }
-            content = await self.complete_image(image_bgr, PADDLE_OCR_PROMPT, max_tokens=1024, extra_body=extra_body)
+            content = await self.complete_image(image_bgr, PADDLE_OCR_PROMPT, max_tokens=256, extra_body=extra_body)
             return clean_plain_ocr_text(content)
         except (ValidationError, LengthFinishReasonError) as exc:
             print(f"[Warn] 프레임 {frame_idx} Paddle OCR 중 예외 발생: {exc!r}")
