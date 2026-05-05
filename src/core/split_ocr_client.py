@@ -13,6 +13,7 @@ from openai import AsyncOpenAI, LengthFinishReasonError
 from pydantic import ValidationError
 
 from core.ocr_types import OcrProcessingError, SpottingItem
+from core.util import clean_ocr_text
 
 TEXT_BBOX_ONLY_PROMPT = """
 Detect ordinary visible text-region bounding boxes in this image.
@@ -184,7 +185,8 @@ def clean_model_text(text: str) -> str:
 def clean_plain_ocr_text(text: str) -> str:
     candidate = clean_model_text(text)
     candidate = re.sub(r"^OCR:\s*", "", candidate, flags=re.IGNORECASE)
-    return candidate.strip()
+    # OCR 결과의 줄바꿈과 연속 공백을 하나의 공백으로 정규화합니다.
+    return clean_ocr_text(candidate)
 
 
 def parse_chandra_text_blocks(content: str, image_width: int, image_height: int) -> list[ChandraTextBlock]:
