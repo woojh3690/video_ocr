@@ -11,7 +11,8 @@ import numpy as np
 sys.path.insert(0, str(Path(__file__).resolve().parent / "src"))
 
 import core.ocr as ocr
-from core.split_ocr_client import ChandraTextBlock
+from core.ocr_types import TEXT_STATUS_TRUNCATED
+from core.split_ocr_client import ChandraTextBlock, PaddleOCRRecognizerClient, RecognizedText, VisionCompletionResult
 
 
 class OcrPipelineTests(unittest.IsolatedAsyncioTestCase):
@@ -172,6 +173,56 @@ class OcrPipelineTests(unittest.IsolatedAsyncioTestCase):
             for line in self.jsonl_path.read_text(encoding="utf-8").splitlines()
         ]
         self.assertEqual(frame_numbers, sorted(frame_numbers))
+
+    async def test_truncated_recognizer_result_preserves_bbox_and_skips_on_resume(self):
+        self._write_detector_cache(range(1, 7), with_blocks=True)
+
+        class DetectorMustNotRun:
+            def __init__(self, *args, **kwargs):
+                raise AssertionError("detector should be skipped")
+
+        class TruncatedRecognizer:
+            def __init__(self, *args, **kwargs):
+                pass
+
+            async def recognize(self, frame_idx, crop):
+                return RecognizedText(text="", text_status=TEXT_STATUS_TRUNCATED)
+
+        await self._run_pipeline(DetectorMustNotRun, TruncatedRecognizer)
+
+        final_records = [
+            json.loads(line)
+            for line in self.jsonl_path.read_text(encoding="utf-8").splitlines()
+        ]
+        first_item = final_records[0]["spotting_items"][0]
+        self.assertEqual(first_item["text"], "")
+        self.assertEqual(first_item["text_status"], TEXT_STATUS_TRUNCATED)
+        self.assertEqual(first_item["quad"], [[0, 0], [500, 0], [500, 500], [0, 500]])
+
+        recognize_calls = []
+
+        class RecognizerMustNotRun:
+            def __init__(self, *args, **kwargs):
+                pass
+
+            async def recognize(self, frame_idx, crop):
+                recognize_calls.append(frame_idx)
+                return "unexpected"
+
+        await self._run_pipeline(DetectorMustNotRun, RecognizerMustNotRun)
+
+        self.assertEqual(recognize_calls, [])
+
+    async def test_recognizer_marks_length_finish_reason_as_truncated(self):
+        class LengthRecognizer(PaddleOCRRecognizerClient):
+            async def complete_image(self, image_bgr, prompt, max_tokens, extra_body=None):
+                return VisionCompletionResult(text="partial text", finish_reason="length")
+
+        client = object.__new__(LengthRecognizer)
+        result = await client.recognize(1, np.zeros((8, 8, 3), dtype=np.uint8))
+
+        self.assertEqual(result.text, "")
+        self.assertEqual(result.text_status, TEXT_STATUS_TRUNCATED)
 
     async def test_existing_ocr_cache_skips_recognition_and_compacts(self):
         self._write_ocr_cache(range(1, 7))

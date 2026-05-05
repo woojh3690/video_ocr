@@ -17,7 +17,7 @@ from PIL import Image, ImageDraw, ImageFont
 from langdetect import detect
 from langdetect.lang_detect_exception import LangDetectException
 
-from core.ocr_types import SpottingItem
+from core.ocr_types import SpottingItem, TEXT_STATUS_OK
 from core.util import clean_ocr_text
 
 @dataclass
@@ -347,8 +347,9 @@ def jsonl_to_srt(jsonl_path_obj: Path, visualize=False):
             for item in ocr_res_json["spotting_items"]:
                 spotting_obj = SpottingItem.from_dict(item)
                 spotting_obj = SpottingItem(
-                    text=clean_ocr_text(spotting_obj.text),
+                    text=clean_ocr_text(spotting_obj.text) if spotting_obj.has_valid_text else "",
                     quad=spotting_obj.quad,
+                    text_status=spotting_obj.text_status,
                 )
                 spotting_items.append(spotting_obj)
             ocr_results.append(FrameInfo(
@@ -365,6 +366,10 @@ def jsonl_to_srt(jsonl_path_obj: Path, visualize=False):
         
         keep_indices = []
         for idx, item in enumerate(frame_info.spotting_items):
+            if not item.has_valid_text:
+                keep_indices.append(idx)
+                continue
+
             text = item.text
             letter_count = sum(1 for ch in text if unicodedata.category(ch).startswith("L"))
             if letter_count > 1:
@@ -379,6 +384,12 @@ def jsonl_to_srt(jsonl_path_obj: Path, visualize=False):
             return ""
         text = unicodedata.normalize("NFKC", text).casefold()
         return "".join(ch for ch in text if ch.isalnum())
+
+    def valid_subtitle_text(item: SpottingItem) -> str:
+        # 정상 OCR 텍스트만 자막 텍스트 후보와 텍스트 유사도에 사용합니다.
+        if item.text_status != TEXT_STATUS_OK:
+            return ""
+        return item.text if filtering_only_text(item.text) else ""
 
     def is_direct_crop_tracking_result() -> bool:
         crop_mode_frames = [frame_info for frame_info in ocr_results if frame_info.ocr_mode == "crop"]
@@ -407,7 +418,18 @@ def jsonl_to_srt(jsonl_path_obj: Path, visualize=False):
                 previous_frame_idx = frame_info.frame_idx
                 continue
 
-            text = frame_info.spotting_items[0].text
+            spotting_item = frame_info.spotting_items[0]
+            has_frame_gap = (
+                previous_frame_idx is not None and
+                frame_info.frame_idx - previous_frame_idx > max_gap_frames
+            )
+            if not spotting_item.has_valid_text:
+                # 잘린 crop 항목은 현재 track의 시간 범위만 이어주고 텍스트 집계는 건너뜁니다.
+                frame_info.track_ids = [current_track_id] if current_track_id is not None and not has_frame_gap else []
+                previous_frame_idx = frame_info.frame_idx
+                continue
+
+            text = spotting_item.text
             norm_text = filtering_only_text(text)
             if not norm_text:
                 frame_info.track_ids = []
@@ -416,10 +438,6 @@ def jsonl_to_srt(jsonl_path_obj: Path, visualize=False):
                 previous_frame_idx = frame_info.frame_idx
                 continue
 
-            has_frame_gap = (
-                previous_frame_idx is not None and
-                frame_info.frame_idx - previous_frame_idx > max_gap_frames
-            )
             text_similarity = (
                 SequenceMatcher(None, norm_text, current_norm_text).ratio()
                 if current_norm_text
@@ -482,9 +500,10 @@ def jsonl_to_srt(jsonl_path_obj: Path, visualize=False):
             if not frame_info.track_ids or not frame_info.spotting_items:
                 continue
             track_id = frame_info.track_ids[0]
-            text = frame_info.spotting_items[0].text
+            text = valid_subtitle_text(frame_info.spotting_items[0])
             track_frame_counts[track_id] += 1
-            track_text_counts[track_id][text] += 1
+            if text:
+                track_text_counts[track_id][text] += 1
             if track_id not in track_start or frame_info.timestamp_sec < track_start[track_id]:
                 track_start[track_id] = frame_info.timestamp_sec
             if track_id not in track_end or frame_info.timestamp_sec > track_end[track_id]:
@@ -578,24 +597,26 @@ def jsonl_to_srt(jsonl_path_obj: Path, visualize=False):
 
     # 트래커를 사용해 텍스트 박스별 track id 계산
     for frame_info in ocr_results:
-        rec_boxes = [item.bbox for item in frame_info.spotting_items]
-        rec_texts = [item.text for item in frame_info.spotting_items]
+        rec_items = frame_info.spotting_items
+        rec_boxes = [item.bbox for item in rec_items]
         if len(rec_boxes) == 0:
             tracker.update(detections=[])
             frame_info.track_ids = []
             continue
         
         detections: list[Detection] = []
-        for det_idx, box in enumerate(rec_boxes):
+        for det_idx, item in enumerate(rec_items):
+            box = item.bbox
             x1, y1, x2, y2 = box
-            text = rec_texts[det_idx] if det_idx < len(rec_texts) else ""
+            text = valid_subtitle_text(item)
             detections.append(Detection(
                 points=np.array([[x1, y1], [x2, y2]]),
                 data={
                     "frame_idx": frame_info.frame_idx,
                     "det_index": det_idx,
                     "raw_text": text,
-                    "norm_text": filtering_only_text(text),
+                    "norm_text": filtering_only_text(text) if item.has_valid_text else "",
+                    "text_status": item.text_status,
                 }
             ))
 
@@ -712,13 +733,14 @@ def jsonl_to_srt(jsonl_path_obj: Path, visualize=False):
     # 프레임 정보 기반으로 카운트 집계
     for frame_info in ocr_results:
         track_ids = frame_info.track_ids
-        rec_texts = [item.text for item in frame_info.spotting_items]
-        rec_boxes = [item.bbox for item in frame_info.spotting_items]
+        rec_items = frame_info.spotting_items
         frame_time = frame_info.timestamp_sec
 
         # 현재 프레임 OCR 결과를 track_id별로 수집
         frame_track_items: dict[int, list[tuple[float, float, float, float, str]]] = defaultdict(list)
-        for track_id, box, text in zip(track_ids, rec_boxes, rec_texts):
+        for track_id, item in zip(track_ids, rec_items):
+            box = item.bbox
+            text = valid_subtitle_text(item)
             x1, y1, x2, y2 = box
             frame_track_items[track_id].append((float(x1), float(y1), float(x2), float(y2), text))
 
@@ -741,7 +763,8 @@ def jsonl_to_srt(jsonl_path_obj: Path, visualize=False):
         # 병합된 프레임 텍스트를 트랙별 카운트/시간 범위로 누적
         for track_id, merged_text in merged_text_by_track.items():
             track_frame_counts[track_id] += 1
-            track_text_counts[track_id][merged_text] += 1
+            if merged_text:
+                track_text_counts[track_id][merged_text] += 1
 
             if track_id not in track_start or frame_time < track_start[track_id]:
                 track_start[track_id] = frame_time

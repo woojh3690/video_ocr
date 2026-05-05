@@ -4,6 +4,11 @@ from dataclasses import asdict, dataclass
 from typing import Tuple
 
 
+# OCR 텍스트가 자막 후보로 유효한지 나타내는 상태 값입니다.
+TEXT_STATUS_OK = "ok"
+TEXT_STATUS_TRUNCATED = "truncated"
+
+
 class OcrProcessingError(RuntimeError):
     def __init__(self, frame_number: int, original_exception: Exception):
         self.frame_number = frame_number
@@ -16,6 +21,7 @@ class OcrProcessingError(RuntimeError):
 class SpottingItem:
     text: str
     quad: Tuple[Tuple[int, int], Tuple[int, int], Tuple[int, int], Tuple[int, int]]
+    text_status: str = TEXT_STATUS_OK
 
     @property
     def bbox(self) -> Tuple[int, int, int, int]:
@@ -28,6 +34,11 @@ class SpottingItem:
         xs = [p[0] for p in self.quad]
         ys = [p[1] for p in self.quad]
         return (sum(xs) / 4.0, sum(ys) / 4.0)
+
+    @property
+    def has_valid_text(self) -> bool:
+        # 정상 OCR 텍스트만 자막 텍스트 후보로 사용합니다.
+        return self.text_status == TEXT_STATUS_OK
 
     def to_dict(self) -> dict:
         data = asdict(self)
@@ -44,4 +55,5 @@ class SpottingItem:
         if len(quad) != 4:
             raise ValueError("quad 좌표는 4개여야 합니다.")
 
-        return cls(text=str(data["text"]), quad=quad)  # type: ignore[arg-type]
+        text_status = str(data.get("text_status") or TEXT_STATUS_OK)
+        return cls(text=str(data.get("text", "")), quad=quad, text_status=text_status)  # type: ignore[arg-type]

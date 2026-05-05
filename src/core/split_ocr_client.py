@@ -12,7 +12,7 @@ import numpy as np
 from openai import AsyncOpenAI, LengthFinishReasonError
 from pydantic import ValidationError
 
-from core.ocr_types import OcrProcessingError, SpottingItem
+from core.ocr_types import OcrProcessingError, SpottingItem, TEXT_STATUS_OK, TEXT_STATUS_TRUNCATED
 from core.util import clean_ocr_text
 
 TEXT_BBOX_ONLY_PROMPT = """
@@ -28,6 +28,20 @@ _TEXT_JSON_BBOX_RE = re.compile(
     r'"label"\s*:\s*"Text".{0,80}?"?bbox"?\s*:\s*(?P<bbox>"[^"]+"|\[[^\]]+\])',
     re.DOTALL,
 )
+
+
+@dataclass(frozen=True, slots=True)
+class VisionCompletionResult:
+    # LLM 응답 본문과 종료 사유를 함께 전달합니다.
+    text: str
+    finish_reason: str | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class RecognizedText:
+    # recognizer 결과가 자막 후보로 쓸 수 있는지 상태를 보존합니다.
+    text: str
+    text_status: str = TEXT_STATUS_OK
 
 
 @dataclass(frozen=True, slots=True)
@@ -87,7 +101,13 @@ class OpenAIVisionClient:
         self.client = AsyncOpenAI(base_url=normalized_base_url, api_key=api_key)
         self.model = model.strip()
 
-    async def complete_image(self, image_bgr: np.ndarray, prompt: str, max_tokens: int, extra_body=None) -> str:
+    async def complete_image(
+        self,
+        image_bgr: np.ndarray,
+        prompt: str,
+        max_tokens: int,
+        extra_body=None,
+    ) -> VisionCompletionResult:
         data_url = image_to_data_url(image_bgr)
         response = await self.client.chat.completions.create(
             model=self.model,
@@ -105,7 +125,11 @@ class OpenAIVisionClient:
             max_tokens=max_tokens,
             extra_body=extra_body or {},
         )
-        return extract_response_text(response.choices[0].message.content)
+        choice = response.choices[0]
+        return VisionCompletionResult(
+            text=extract_response_text(choice.message.content),
+            finish_reason=getattr(choice, "finish_reason", None),
+        )
 
 
 class ChandraDetectorClient(OpenAIVisionClient):
@@ -115,8 +139,11 @@ class ChandraDetectorClient(OpenAIVisionClient):
         image_bgr: np.ndarray,
     ) -> tuple[int, list[ChandraTextBlock], str | None]:
         try:
-            content = await self.complete_image(image_bgr, TEXT_BBOX_ONLY_PROMPT, max_tokens=512)
-            content = clean_model_text(content)
+            result = await self.complete_image(image_bgr, TEXT_BBOX_ONLY_PROMPT, max_tokens=512)
+            if result.finish_reason == "length":
+                print(f"[Warn] 프레임 {frame_idx} Chandra bbox 결과가 max_tokens로 중단되었습니다.")
+                return frame_idx, [], None
+            content = clean_model_text(result.text)
             blocks = parse_chandra_text_blocks(content, image_bgr.shape[1], image_bgr.shape[0])
             return frame_idx, blocks, None
         except (ValidationError, LengthFinishReasonError) as exc:
@@ -133,14 +160,20 @@ class PaddleOCRRecognizerClient(OpenAIVisionClient):
         self,
         frame_idx: int,
         image_bgr: np.ndarray,
-    ) -> str:
+    ) -> RecognizedText:
         try:
             extra_body={ "repetition_penalty": 1.03 }
-            content = await self.complete_image(image_bgr, PADDLE_OCR_PROMPT, max_tokens=256, extra_body=extra_body)
-            return clean_plain_ocr_text(content)
-        except (ValidationError, LengthFinishReasonError) as exc:
+            result = await self.complete_image(image_bgr, PADDLE_OCR_PROMPT, max_tokens=256, extra_body=extra_body)
+            if result.finish_reason == "length":
+                print(f"[Warn] 프레임 {frame_idx} Paddle OCR 결과가 max_tokens로 중단되었습니다.")
+                return RecognizedText(text="", text_status=TEXT_STATUS_TRUNCATED)
+            return RecognizedText(text=clean_plain_ocr_text(result.text))
+        except LengthFinishReasonError as exc:
+            print(f"[Warn] 프레임 {frame_idx} Paddle OCR 결과가 max_tokens로 중단되었습니다: {exc!r}")
+            return RecognizedText(text="", text_status=TEXT_STATUS_TRUNCATED)
+        except ValidationError as exc:
             print(f"[Warn] 프레임 {frame_idx} Paddle OCR 중 예외 발생: {exc!r}")
-            return ""
+            return RecognizedText(text="")
         except Exception as exc:
             error = OcrProcessingError(frame_idx, exc)
             print(f"[Error] {error}")
@@ -405,8 +438,24 @@ def crop_with_padding(image_bgr: np.ndarray, bbox: tuple[int, int, int, int]) ->
     return image_bgr[crop_y1:crop_y2, crop_x1:crop_x2]
 
 
-def spotting_item_from_block(block: ChandraTextBlock, text: str) -> SpottingItem | None:
-    cleaned_text = clean_plain_ocr_text(text)
+def normalize_recognized_text(text: str | RecognizedText) -> RecognizedText:
+    # 기존 테스트/호출부의 문자열 반환도 동일한 경로로 정규화합니다.
+    if isinstance(text, RecognizedText):
+        return text
+    return RecognizedText(text=clean_plain_ocr_text(text))
+
+
+def spotting_item_from_block(block: ChandraTextBlock, text: str | RecognizedText) -> SpottingItem | None:
+    recognized_text = normalize_recognized_text(text)
+    if recognized_text.text_status != TEXT_STATUS_OK:
+        # 잘린 OCR은 텍스트를 버리되 bbox 추적용 항목은 유지합니다.
+        return SpottingItem(
+            text="",
+            quad=block.normalized_quad,
+            text_status=recognized_text.text_status,
+        )
+
+    cleaned_text = clean_plain_ocr_text(recognized_text.text)
     if not cleaned_text:
         return None
     return SpottingItem(text=cleaned_text, quad=block.normalized_quad)
