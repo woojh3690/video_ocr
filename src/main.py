@@ -82,6 +82,8 @@ kafka_producer: Optional[KafkaProducer] = None
 
 DETECTOR_ROLE = "detector"
 RECOGNIZER_ROLE = "recognizer"
+task_scheduler_lock = asyncio.Lock()
+vllm_role_lock = asyncio.Lock()
 
 
 def create_kafka_producer(settings: AppSettings) -> Optional[KafkaProducer]:
@@ -397,6 +399,7 @@ async def is_vllm_health(role: str):
     """Check if vllm server is reachable"""
     config = get_role_vllm_config(role)
     base_url = (config["base_url"] or "").strip()
+    expected_model = (config["model"] or "").strip()
     if not base_url:
         return False
     client = openai.AsyncOpenAI(
@@ -408,7 +411,10 @@ async def is_vllm_health(role: str):
         model_ids = [item.id for item in getattr(models, "data", []) if getattr(item, "id", None)]
         if model_ids:
             print(f"{config['role_name']} vLLM 모델 목록: {', '.join(model_ids)}")
-        return True
+        if expected_model and expected_model not in model_ids:
+            print(f"{config['role_name']} vLLM 모델 불일치: {expected_model} 없음")
+            return False
+        return bool(model_ids)
     except Exception as exc:
         print(f"{config['role_name']} vLLM 헬스체크 실패: {exc}")
         return False
@@ -623,6 +629,12 @@ async def fail_task(task: Task, message: str) -> None:
 
 
 async def ensure_vllm_role(role: str, task: Task) -> bool:
+    # 같은 포트를 공유하는 vLLM 컨테이너 전환은 한 번에 하나만 수행합니다.
+    async with vllm_role_lock:
+        return await ensure_vllm_role_unlocked(role, task)
+
+
+async def ensure_vllm_role_unlocked(role: str, task: Task) -> bool:
     config = get_role_vllm_config(role)
     role_name = str(config["role_name"])
     target_container_name = (config["docker_name"] or "").strip()
@@ -787,6 +799,12 @@ async def run_ocr_task(
 
 
 async def start_next_task():
+    # 큐에서 작업을 꺼내는 순간 상태를 선점해 중복 실행을 막습니다.
+    async with task_scheduler_lock:
+        await start_next_task_unlocked()
+
+
+async def start_next_task_unlocked():
     """대기 상태인 다음 작업이 있으면 실행합니다."""
 
     # 현재 실행 중인 작업이 있다면 다음 작업을 시작하지 않습니다.
@@ -803,6 +821,9 @@ async def start_next_task():
         return
 
     next_task = tasks[next_id]
+    next_task.status = Status.running
+    next_task.progress = max(1, next_task.progress)
+    await broadcast_update(next_task)
     asyncio.create_task(
         run_ocr_task(
             next_id,
