@@ -37,24 +37,200 @@ class Segment:
     text: str
 
 
+# 같은 자막이 OCR 흔들림으로 짧게 끊겼을 때 다시 붙일 허용 간격입니다.
+DUPLICATE_SEGMENT_MAX_GAP_SEC = 2.0
+
+# 긴 OCR 후보 안에 포함된 짧은 파편 자막을 흡수할 허용 간격입니다.
+CONTAINED_SEGMENT_MAX_GAP_SEC = 1.0
+
+# 시간상 붙어 있고 긴 후보에 포함된 4자 이상의 짧은 파편은 자동 흡수합니다.
+MIN_CONTAINED_MERGE_KEY_LEN = 4
+
+
+def _normalized_merge_key(text: str) -> str:
+    # 자막 병합 비교에서는 OCR이 흔들기 쉬운 공백, 문장부호, 대소문자를 제외합니다.
+    normalized = unicodedata.normalize("NFKC", text).casefold()
+    return "".join(ch for ch in normalized if ch.isalnum())
+
+
+def _is_safe_containment(short_key: str, long_key: str) -> bool:
+    # 짧은 파편은 긴 문장의 중간 단어일 수 있으므로 앞/뒤 경계에 붙은 경우만 흡수합니다.
+    if short_key not in long_key:
+        return False
+    if len(short_key) >= 6:
+        return True
+    return long_key.startswith(short_key) or long_key.endswith(short_key)
+
+
 def _merge_nearby_identical_segments(segments: list[Segment], max_gap_sec: float = 1.0) -> list[Segment]:
-    # 시작 시각 기준으로 정렬된 최종 세그먼트 중 같은 텍스트가 1초 이내로 이어지면 하나로 합칩니다.
+    # 같은 텍스트가 다른 겹침 자막 사이에 끼어도 시간 간격이 짧으면 하나로 병합합니다.
     merged_segments: list[Segment] = []
     for seg in sorted(segments, key=lambda item: (item.start, item.end, item.text)):
-        if not merged_segments:
-            merged_segments.append(seg)
-            continue
+        seg_key = _normalized_merge_key(seg.text)
+        matching_segment: Segment | None = None
 
-        previous = merged_segments[-1]
-        gap_sec = seg.start - previous.end
-        if previous.text == seg.text and gap_sec <= max_gap_sec:
-            previous.end = max(previous.end, seg.end)
-            previous.start = min(previous.start, seg.start)
+        for previous in reversed(merged_segments):
+            previous_key = _normalized_merge_key(previous.text)
+            gap_sec = seg.start - previous.end
+            if seg_key and seg_key == previous_key and gap_sec <= max_gap_sec:
+                matching_segment = previous
+                break
+
+        if matching_segment is not None:
+            matching_segment.end = max(matching_segment.end, seg.end)
+            matching_segment.start = min(matching_segment.start, seg.start)
+            if len(seg.text) > len(matching_segment.text):
+                matching_segment.text = seg.text
             continue
 
         merged_segments.append(seg)
 
-    return merged_segments
+    return sorted(merged_segments, key=lambda item: (item.start, item.end, item.text))
+
+
+def _merge_contained_segments(
+    segments: list[Segment],
+    max_gap_sec: float = CONTAINED_SEGMENT_MAX_GAP_SEC,
+    min_key_len: int = MIN_CONTAINED_MERGE_KEY_LEN,
+) -> list[Segment]:
+    # 긴 자막 안에 그대로 들어간 짧은 파편은 시간상 붙어 있을 때 긴 자막으로 흡수합니다.
+    merged_segments: list[Segment] = []
+    for seg in sorted(segments, key=lambda item: (item.start, item.end, item.text)):
+        seg_key = _normalized_merge_key(seg.text)
+        matching_segment: Segment | None = None
+        should_use_current_text = False
+
+        for previous in reversed(merged_segments):
+            previous_key = _normalized_merge_key(previous.text)
+            if not seg_key or not previous_key or seg_key == previous_key:
+                continue
+
+            gap_sec = seg.start - previous.end
+            overlap_sec = min(seg.end, previous.end) - max(seg.start, previous.start)
+            if gap_sec > max_gap_sec and overlap_sec <= 0.0:
+                continue
+
+            short_key, long_key = (
+                (seg_key, previous_key)
+                if len(seg_key) <= len(previous_key)
+                else (previous_key, seg_key)
+            )
+            if len(short_key) < min_key_len or not _is_safe_containment(short_key, long_key):
+                continue
+
+            matching_segment = previous
+            should_use_current_text = len(seg_key) > len(previous_key)
+            break
+
+        if matching_segment is not None:
+            matching_segment.start = min(matching_segment.start, seg.start)
+            matching_segment.end = max(matching_segment.end, seg.end)
+            if should_use_current_text:
+                matching_segment.text = seg.text
+            continue
+
+        merged_segments.append(seg)
+
+    return sorted(merged_segments, key=lambda item: (item.start, item.end, item.text))
+
+
+def _dedupe_repeated_lines(text: str) -> str:
+    # 같은 세그먼트 안에 중복으로 잡힌 OCR 줄은 한 번만 남깁니다.
+    deduped_lines: list[tuple[str, str]] = []
+    for line in text.splitlines():
+        stripped = line.strip()
+        if not stripped:
+            continue
+
+        line_key = _normalized_merge_key(stripped)
+        if not line_key:
+            deduped_lines.append((stripped, ""))
+            continue
+
+        skip_line = False
+        for idx, (existing_line, existing_key) in enumerate(deduped_lines):
+            if not existing_key:
+                continue
+
+            if line_key == existing_key:
+                skip_line = True
+                break
+
+            short_key, long_key = (
+                (line_key, existing_key)
+                if len(line_key) <= len(existing_key)
+                else (existing_key, line_key)
+            )
+            if len(short_key) < MIN_CONTAINED_MERGE_KEY_LEN or not _is_safe_containment(short_key, long_key):
+                continue
+
+            if len(line_key) > len(existing_key):
+                deduped_lines[idx] = (stripped, line_key)
+            skip_line = True
+            break
+
+        if not skip_line:
+            deduped_lines.append((stripped, line_key))
+
+    return "\n".join(line for line, _ in deduped_lines)
+
+
+def _normalize_segment_texts(segments: list[Segment]) -> list[Segment]:
+    # 후처리 전에 세그먼트 내부 줄 단위 중복을 정리합니다.
+    normalized_segments: list[Segment] = []
+    for seg in segments:
+        normalized_text = _dedupe_repeated_lines(seg.text)
+        if normalized_text:
+            seg.text = normalized_text
+            normalized_segments.append(seg)
+    return normalized_segments
+
+
+def _postprocess_segments(segments: list[Segment], max_passes: int = 3) -> list[Segment]:
+    # 병합으로 새 포함 관계가 생길 수 있으므로 짧게 반복해 고정점에 가깝게 정리합니다.
+    processed_segments = _normalize_segment_texts(segments)
+    for _ in range(max_passes):
+        before = [(seg.start, seg.end, seg.text) for seg in processed_segments]
+        processed_segments = _merge_nearby_identical_segments(
+            processed_segments,
+            max_gap_sec=DUPLICATE_SEGMENT_MAX_GAP_SEC,
+        )
+        processed_segments = _merge_contained_segments(processed_segments)
+        processed_segments = _normalize_segment_texts(processed_segments)
+        after = [(seg.start, seg.end, seg.text) for seg in processed_segments]
+        if after == before:
+            break
+    return processed_segments
+
+
+def _choose_representative_text(text_counter: Counter[str]) -> str:
+    # OCR 후보를 정규화해 집계하고, 충분히 반복된 긴 후보가 있으면 대표 문장으로 고릅니다.
+    normalized_counts: Counter[str] = Counter()
+    display_counts_by_key: dict[str, Counter[str]] = defaultdict(Counter)
+    for text, count in text_counter.items():
+        cleaned_text = _dedupe_repeated_lines(text)
+        key = _normalized_merge_key(cleaned_text)
+        if not key:
+            continue
+        normalized_counts[key] += count
+        display_counts_by_key[key][cleaned_text] += count
+
+    if not normalized_counts:
+        return ""
+
+    best_key = max(normalized_counts, key=lambda key: (normalized_counts[key], len(key)))
+    best_count = normalized_counts[best_key]
+    chosen_key = best_key
+
+    for key, count in normalized_counts.items():
+        if key == best_key or best_key not in key:
+            continue
+        if count >= max(2, best_count * 0.35):
+            if (len(key), count) > (len(chosen_key), normalized_counts[chosen_key]):
+                chosen_key = key
+
+    display_counter = display_counts_by_key[chosen_key]
+    return max(display_counter, key=lambda text: (display_counter[text], len(_normalized_merge_key(text))))
 
 
 def _filter_short_segments(segments: list[Segment], min_duration_sec: float = 0.5) -> list[Segment]:
@@ -351,7 +527,7 @@ def _dump_visualized_frames_with_progress(video_path: Path, frame_infos: list[Fr
     print(f"[Viz] Saved: {saved_count}, skipped: {skipped_count}")
 
 
-def jsonl_to_srt(jsonl_path_obj: Path, visualize=False):
+def jsonl_to_srt(jsonl_path_obj: Path, visualize=False) -> Path:
     # 경로 확인
     if not jsonl_path_obj.exists():
         raise FileNotFoundError(f"JSONL file not found: {jsonl_path_obj}")
@@ -488,9 +664,9 @@ def jsonl_to_srt(jsonl_path_obj: Path, visualize=False):
         h = total_minutes // 60
         return f"{h:02d}:{m:02d}:{s:02d},{ms:03d}"
 
-    def write_direct_crop_segments(segments: list[Segment]) -> None:
+    def write_direct_crop_segments(segments: list[Segment]) -> Path:
         segments.sort(key=lambda seg: (seg.start, seg.end, seg.text))
-        segments = _merge_nearby_identical_segments(segments)
+        segments = _postprocess_segments(segments)
         segments = [seg for seg in segments if seg.end >= seg.start]
         segments = _filter_short_segments(segments)
         for i, seg in enumerate(segments, start=1):
@@ -515,6 +691,8 @@ def jsonl_to_srt(jsonl_path_obj: Path, visualize=False):
                 handle.write(f"{seg.index}\n")
                 handle.write(f"{to_direct_srt_timestamp(seg.start)} --> {to_direct_srt_timestamp(seg.end)}\n")
                 handle.write(f"{seg.text}\n")
+
+        return srt_path
 
     def build_direct_crop_segments() -> list[Segment]:
         assign_direct_crop_track_ids()
@@ -543,19 +721,21 @@ def jsonl_to_srt(jsonl_path_obj: Path, visualize=False):
             text_counter = track_text_counts.get(track_id)
             if not text_counter:
                 continue
+            seg_text = _choose_representative_text(text_counter)
+            if not seg_text:
+                continue
             segments.append(
                 Segment(
                     index=0,
                     start=float(track_start[track_id]),
                     end=float(track_end[track_id]),
-                    text=text_counter.most_common(1)[0][0],
+                    text=seg_text,
                 )
             )
         return segments
 
     if is_direct_crop_tracking_result():
-        write_direct_crop_segments(build_direct_crop_segments())
-        return
+        return write_direct_crop_segments(build_direct_crop_segments())
 
     def box_from_points(points: np.ndarray) -> tuple[float, float, float, float]:
         x1 = float(min(points[0][0], points[1][0]))
@@ -805,8 +985,10 @@ def jsonl_to_srt(jsonl_path_obj: Path, visualize=False):
         text_counter = track_text_counts.get(track_id)
         if not text_counter:
             continue
-    
-        seg_text = text_counter.most_common(1)[0][0]
+
+        seg_text = _choose_representative_text(text_counter)
+        if not seg_text:
+            continue
         segments.append(
             Segment(
                 index=0,
@@ -818,7 +1000,7 @@ def jsonl_to_srt(jsonl_path_obj: Path, visualize=False):
 
     # 처리 로직 주석
     segments.sort(key=lambda seg: (seg.start, seg.end, seg.text))
-    segments = _merge_nearby_identical_segments(segments)
+    segments = _postprocess_segments(segments)
 
     # end < start 인 세그먼트 제거
     segments = [seg for seg in segments if seg.end >= seg.start]
@@ -860,6 +1042,8 @@ def jsonl_to_srt(jsonl_path_obj: Path, visualize=False):
             handle.write(f"{seg.index}\n")
             handle.write(f"{to_srt_timestamp(seg.start)} --> {to_srt_timestamp(seg.end)}\n")
             handle.write(f"{seg.text}\n")
+
+    return srt_path
 
 
 def main():
