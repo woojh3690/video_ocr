@@ -407,8 +407,17 @@ function updateTaskRow(task) {
     }
 
     const videoCell = row.querySelector('.video-file');
-    videoCell.textContent = videoFile;
+    videoCell.textContent = '';
     videoCell.title = videoFile;
+    if (status === 'completed') {
+        const editorLink = document.createElement('a');
+        editorLink.href = `/subtitle-editor/${encodeURIComponent(taskId)}`;
+        editorLink.textContent = videoFile;
+        editorLink.className = 'subtitle-editor-link';
+        videoCell.appendChild(editorLink);
+    } else {
+        videoCell.textContent = videoFile;
+    }
 
     const progressBar = row.querySelector('.progress-bar');
     progressBar.style.width = `${progress}%`;

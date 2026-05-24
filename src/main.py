@@ -28,6 +28,7 @@ from pydantic import BaseModel, ValidationError, ConfigDict
 from core.ocr import process_ocr, UPLOAD_DIR, OcrProcessingError, is_detector_cache_complete
 from core.docker_manager import DockerManager
 from core.settings_manager import AppSettings, settings_manager
+from subtitle_editor import create_subtitle_editor_router
 
 class Status(str, Enum):
     waiting = "waiting"
@@ -773,9 +774,12 @@ async def run_ocr_task(
 
         # OCR 완료 상태를 처리합니다.
         task.status = Status.completed
-        filename_without_ext = os.path.splitext(os.path.basename(video_filename))[0]
-        srt_path = os.path.join(UPLOAD_DIR, f"{filename_without_ext}.srt")
-        task.result = srt_path if os.path.exists(srt_path) else None
+        video_path_obj = Path(UPLOAD_DIR) / video_filename
+        srt_candidates = list(video_path_obj.parent.glob(f"{video_path_obj.stem}.*.srt"))
+        plain_srt_path = video_path_obj.with_suffix(".srt")
+        if plain_srt_path.exists():
+            srt_candidates.append(plain_srt_path)
+        task.result = str(max(srt_candidates, key=lambda path: path.stat().st_mtime)) if srt_candidates else None
         publish_kafka_message("discord_bot", {
             "type": "msg",
             "msg": f"{video_filename} OCR 완료."
@@ -921,6 +925,10 @@ async def broadcast_update(task: Task):
 # ---------------------------
 # 작업 상태 조회 엔드포인트
 # ---------------------------
+# 자막 병합 튜닝 에디터 라우터는 별도 모듈에서 관리합니다.
+app.include_router(create_subtitle_editor_router(tasks, save_tasks, broadcast_update))
+
+
 @app.get("/tasks/")
 async def get_tasks():
     return {tid: asdict(task) for tid, task in tasks.items()}

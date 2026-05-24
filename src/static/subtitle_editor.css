@@ -1,0 +1,357 @@
+html,
+body {
+    height: 100%;
+}
+
+body {
+    margin: 0;
+    background: #f6f7f9;
+    color: #1f2933;
+}
+
+.subtitle-editor-page {
+    min-height: 100vh;
+    padding: 20px 24px 24px;
+}
+
+.editor-header {
+    display: flex;
+    align-items: flex-end;
+    justify-content: space-between;
+    gap: 16px;
+    margin-bottom: 16px;
+}
+
+.editor-back-link {
+    display: inline-flex;
+    align-items: center;
+    color: #2f5f8f;
+    font-size: 0.9rem;
+    text-decoration: none;
+}
+
+.editor-back-link:hover {
+    color: #1e476d;
+    text-decoration: underline;
+}
+
+.editor-title {
+    margin: 4px 0 2px;
+    font-size: 1.65rem;
+    font-weight: 700;
+}
+
+.editor-file-name {
+    min-height: 1.25rem;
+    color: #52616f;
+    font-size: 0.95rem;
+    word-break: break-all;
+}
+
+.editor-header-actions {
+    display: flex;
+    align-items: center;
+    justify-content: flex-end;
+    gap: 8px;
+    flex-wrap: wrap;
+}
+
+.editor-status {
+    min-width: 160px;
+    max-width: 420px;
+    padding: 6px 10px;
+    border: 1px solid #d5dae1;
+    border-radius: 8px;
+    background: #ffffff;
+    color: #334155;
+    font-size: 0.86rem;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.editor-status[data-tone="loading"] {
+    border-color: #c9b456;
+    background: #fff8da;
+    color: #6b5700;
+}
+
+.editor-status[data-tone="success"] {
+    border-color: #65a77a;
+    background: #e8f6ed;
+    color: #1f6b3d;
+}
+
+.editor-status[data-tone="error"] {
+    border-color: #d27a7a;
+    background: #fdecec;
+    color: #9b2525;
+}
+
+.subtitle-editor-layout {
+    display: grid;
+    grid-template-columns: minmax(320px, 38%) minmax(420px, 1fr);
+    gap: 16px;
+    height: calc(100vh - 124px);
+    min-height: 620px;
+}
+
+.subtitle-list-panel,
+.preview-panel {
+    min-width: 0;
+    border: 1px solid #d9dee6;
+    border-radius: 8px;
+    background: #ffffff;
+}
+
+.subtitle-list-panel {
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+}
+
+.panel-heading {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    padding: 12px 14px;
+    border-bottom: 1px solid #e4e8ee;
+}
+
+.panel-heading h2 {
+    margin: 0;
+    font-size: 1rem;
+    font-weight: 700;
+}
+
+.segment-count {
+    color: #52616f;
+    font-size: 0.86rem;
+}
+
+.subtitle-list {
+    flex: 1;
+    overflow: auto;
+}
+
+.subtitle-row {
+    padding: 10px 12px;
+    border-bottom: 1px solid #eef1f5;
+    cursor: default;
+    outline: none;
+}
+
+.subtitle-row:hover,
+.subtitle-row:focus {
+    background: #f3f6f9;
+}
+
+.subtitle-row.active {
+    background: #e8f1fb;
+    box-shadow: inset 4px 0 0 #2f80c4;
+}
+
+.subtitle-time {
+    margin-bottom: 4px;
+    color: #6b7785;
+    font-family: Consolas, "Liberation Mono", monospace;
+    font-size: 0.78rem;
+}
+
+.subtitle-text {
+    color: #1f2933;
+    font-size: 0.95rem;
+    line-height: 1.45;
+    white-space: pre-wrap;
+    word-break: break-word;
+}
+
+.preview-panel {
+    display: flex;
+    flex-direction: column;
+    padding: 14px;
+    overflow: hidden;
+}
+
+.video-preview-shell {
+    position: relative;
+    width: 100%;
+    aspect-ratio: 16 / 9;
+    min-height: 260px;
+    max-height: min(58vh, 640px);
+    border-radius: 8px;
+    overflow: hidden;
+    background: #05070a;
+}
+
+#preview-video {
+    display: block;
+    width: 100%;
+    height: 100%;
+    background: #05070a;
+}
+
+.subtitle-overlay {
+    position: absolute;
+    left: 8%;
+    right: 8%;
+    bottom: 9%;
+    min-height: 2.6rem;
+    display: flex;
+    align-items: flex-end;
+    justify-content: center;
+    color: #ffffff;
+    font-size: 1.18rem;
+    font-weight: 700;
+    line-height: 1.35;
+    text-align: center;
+    text-shadow:
+        0 2px 4px #000000,
+        0 0 2px #000000;
+    white-space: pre-wrap;
+    pointer-events: none;
+}
+
+.metrics-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    min-height: 34px;
+    padding: 8px 2px 6px;
+    color: #52616f;
+    font-size: 0.86rem;
+}
+
+#metrics-summary,
+#srt-file-name {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+#srt-file-name {
+    text-align: right;
+}
+
+.slider-panel {
+    flex: 1;
+    min-height: 0;
+    overflow: auto;
+    padding: 4px 2px 0;
+}
+
+.slider-row {
+    display: flex;
+    align-items: center;
+    gap: 14px;
+    min-height: 66px;
+    padding: 10px 0;
+    border-top: 1px solid #edf0f4;
+}
+
+.slider-main {
+    flex: 0 0 50%;
+    max-width: 50%;
+    min-width: 260px;
+}
+
+.slider-label-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+    margin-bottom: 4px;
+}
+
+.slider-label {
+    margin: 0;
+    color: #263340;
+    font-size: 0.9rem;
+    font-weight: 600;
+}
+
+.slider-value {
+    flex: 0 0 auto;
+    color: #52616f;
+    font-family: Consolas, "Liberation Mono", monospace;
+    font-size: 0.84rem;
+}
+
+.merge-slider {
+    width: 100%;
+}
+
+.slider-caption {
+    flex: 1 1 auto;
+    min-width: 180px;
+    color: #5b6876;
+    font-size: 0.86rem;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+@media (max-width: 980px) {
+    .subtitle-editor-page {
+        padding: 14px;
+    }
+
+    .editor-header {
+        align-items: flex-start;
+        flex-direction: column;
+    }
+
+    .subtitle-editor-layout {
+        grid-template-columns: 1fr;
+        height: auto;
+        min-height: 0;
+    }
+
+    .subtitle-list-panel {
+        min-height: 360px;
+        max-height: 48vh;
+    }
+
+    .preview-panel {
+        min-height: 640px;
+    }
+}
+
+@media (max-width: 680px) {
+    .editor-header-actions {
+        width: 100%;
+        justify-content: stretch;
+    }
+
+    .editor-status {
+        width: 100%;
+        max-width: none;
+    }
+
+    .slider-row {
+        align-items: stretch;
+        flex-direction: column;
+        gap: 6px;
+    }
+
+    .slider-main {
+        flex-basis: auto;
+        max-width: none;
+        min-width: 0;
+        width: 100%;
+    }
+
+    .slider-caption {
+        min-width: 0;
+        white-space: normal;
+    }
+
+    .subtitle-overlay {
+        left: 5%;
+        right: 5%;
+        bottom: 12%;
+        font-size: 1rem;
+    }
+}

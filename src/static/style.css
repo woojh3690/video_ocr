@@ -769,3 +769,13 @@ body.settings-page {
     }
 }
 /* End UI alignment fixes */
+.subtitle-editor-link {
+    color: #2f5f8f;
+    font-weight: 600;
+    text-decoration: none;
+}
+
+.subtitle-editor-link:hover {
+    color: #1e476d;
+    text-decoration: underline;
+}

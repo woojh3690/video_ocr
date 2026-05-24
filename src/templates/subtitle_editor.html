@@ -1,0 +1,54 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>자막 병합 튜닝</title>
+    <link id="favicon" rel="icon" type="image/x-icon" href="/static/favicon.ico">
+    <link rel="stylesheet" href="https://stackpath.bootstrapcdn.com/bootstrap/4.5.0/css/bootstrap.min.css">
+    <link rel="stylesheet" href="/static/style.css?v=mask-layout-4">
+    <link rel="stylesheet" href="/static/subtitle_editor.css?v=merge-editor-1">
+</head>
+<body data-task-id="{{ task_id }}">
+    <main class="subtitle-editor-page">
+        <header class="editor-header">
+            <div>
+                <a href="/" class="editor-back-link">작업 목록</a>
+                <h1 class="editor-title">자막 병합 튜닝</h1>
+                <div id="editor-file-name" class="editor-file-name"></div>
+            </div>
+            <div class="editor-header-actions">
+                <span id="editor-status" class="editor-status">로딩 중</span>
+                <button id="reset-params-btn" class="btn btn-outline-secondary btn-sm" type="button">기본값 복원</button>
+                <button id="merge-save-btn" class="btn btn-primary btn-sm" type="button">병합</button>
+            </div>
+        </header>
+
+        <section class="subtitle-editor-layout">
+            <aside class="subtitle-list-panel" aria-label="자막 목록">
+                <div class="panel-heading">
+                    <h2>자막</h2>
+                    <span id="segment-count" class="segment-count">0개</span>
+                </div>
+                <div id="subtitle-list" class="subtitle-list"></div>
+            </aside>
+
+            <section class="preview-panel" aria-label="영상 프리뷰">
+                <div class="video-preview-shell">
+                    <video id="preview-video" controls preload="metadata" disablePictureInPicture controlslist="nodownload"></video>
+                    <div id="subtitle-overlay" class="subtitle-overlay" aria-live="polite"></div>
+                </div>
+
+                <div class="metrics-row">
+                    <span id="metrics-summary">세그먼트 0개</span>
+                    <span id="srt-file-name"></span>
+                </div>
+
+                <div id="slider-panel" class="slider-panel" aria-label="병합 파라미터"></div>
+            </section>
+        </section>
+    </main>
+
+    <script src="/static/subtitle_editor.js?v=merge-editor-1"></script>
+</body>
+</html>

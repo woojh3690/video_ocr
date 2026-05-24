@@ -8,6 +8,8 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 
 from core.jsonl_to_srt import (
+    DEFAULT_MERGE_PARAMS,
+    MergeParams,
     Segment,
     _choose_representative_text,
     _dedupe_repeated_lines,
@@ -17,6 +19,7 @@ from core.jsonl_to_srt import (
     _merge_highly_similar_segments,
     _merge_nearby_identical_segments,
     _postprocess_segments,
+    postprocess_base_segments,
     jsonl_to_srt,
 )
 from core.ocr_types import SpottingItem, TEXT_STATUS_TRUNCATED
@@ -47,6 +50,90 @@ def make_full_screen_record(frame_number: int, items: list[SpottingItem]) -> dic
 
 
 class JsonlToSrtTests(unittest.TestCase):
+    def test_merge_params_defaults_match_current_algorithm_values(self):
+        self.assertEqual(DEFAULT_MERGE_PARAMS.duplicate_gap_sec, 2.0)
+        self.assertEqual(DEFAULT_MERGE_PARAMS.contained_gap_sec, 1.0)
+        self.assertEqual(DEFAULT_MERGE_PARAMS.min_contained_key_len, 4)
+        self.assertEqual(DEFAULT_MERGE_PARAMS.similar_threshold, 0.95)
+        self.assertEqual(DEFAULT_MERGE_PARAMS.min_similar_key_len, 8)
+        self.assertEqual(DEFAULT_MERGE_PARAMS.similar_length_ratio, 0.75)
+        self.assertEqual(DEFAULT_MERGE_PARAMS.min_duration_sec, 0.5)
+        self.assertEqual(DEFAULT_MERGE_PARAMS.postprocess_passes, 3)
+
+    def test_duplicate_gap_param_changes_postprocess_result(self):
+        segments = [
+            Segment(index=0, start=0.0, end=1.0, text="stable subtitle"),
+            Segment(index=0, start=2.5, end=3.0, text="stable subtitle"),
+        ]
+
+        strict_segments = postprocess_base_segments(
+            segments,
+            params=MergeParams(duplicate_gap_sec=1.0, min_duration_sec=0.0),
+        )
+        default_segments = postprocess_base_segments(
+            segments,
+            params=MergeParams(min_duration_sec=0.0),
+        )
+
+        self.assertEqual(len(strict_segments), 2)
+        self.assertEqual(len(default_segments), 1)
+        self.assertEqual(default_segments[0].end, 3.0)
+
+    def test_min_contained_key_len_param_changes_fragment_absorption(self):
+        segments = [
+            Segment(index=0, start=0.0, end=1.0, text="go!"),
+            Segment(index=0, start=1.0, end=2.0, text="go! now"),
+        ]
+
+        default_segments = postprocess_base_segments(
+            segments,
+            params=MergeParams(min_duration_sec=0.0),
+        )
+        permissive_segments = postprocess_base_segments(
+            segments,
+            params=MergeParams(min_contained_key_len=2, min_duration_sec=0.0),
+        )
+
+        self.assertEqual(len(default_segments), 2)
+        self.assertEqual(len(permissive_segments), 1)
+        self.assertEqual(permissive_segments[0].text, "go! now")
+
+    def test_similar_threshold_param_changes_postprocess_result(self):
+        segments = [
+            Segment(index=0, start=0.0, end=1.0, text="abcdefghijabcdefghijabcdefghij"),
+            Segment(index=0, start=1.0, end=2.0, text="abcdefghijabcdefghijabcdefghiX"),
+        ]
+
+        strict_segments = postprocess_base_segments(
+            segments,
+            params=MergeParams(similar_threshold=0.99, min_duration_sec=0.0),
+        )
+        permissive_segments = postprocess_base_segments(
+            segments,
+            params=MergeParams(similar_threshold=0.95, min_duration_sec=0.0),
+        )
+
+        self.assertEqual(len(strict_segments), 2)
+        self.assertEqual(len(permissive_segments), 1)
+
+    def test_similar_length_ratio_param_changes_postprocess_result(self):
+        segments = [
+            Segment(index=0, start=0.0, end=1.0, text="abcdefghijabcdefghij"),
+            Segment(index=0, start=1.0, end=2.0, text="Zbcdefghijabcdefghij extra"),
+        ]
+
+        strict_segments = postprocess_base_segments(
+            segments,
+            params=MergeParams(similar_threshold=0.8, similar_length_ratio=0.95, min_duration_sec=0.0),
+        )
+        permissive_segments = postprocess_base_segments(
+            segments,
+            params=MergeParams(similar_threshold=0.8, similar_length_ratio=0.75, min_duration_sec=0.0),
+        )
+
+        self.assertEqual(len(strict_segments), 2)
+        self.assertEqual(len(permissive_segments), 1)
+
     def test_nearby_identical_segments_are_merged(self):
         segments = [
             Segment(index=0, start=0.0, end=1.0, text="same subtitle"),

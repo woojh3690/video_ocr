@@ -6,7 +6,7 @@ from pathlib import Path
 from dataclasses import dataclass, field
 from difflib import SequenceMatcher
 from collections import Counter, defaultdict
-from typing import List
+from typing import Any, List, Mapping
 
 import cv2
 import numpy as np
@@ -51,6 +51,62 @@ SIMILAR_SEGMENT_THRESHOLD = 0.95
 
 # 너무 짧은 텍스트의 유사도는 우연히 높을 수 있으므로 제외합니다.
 MIN_SIMILAR_MERGE_KEY_LEN = 8
+
+# 고유사 병합은 길이가 크게 다른 OCR 후보를 보수적으로 제외합니다.
+SIMILAR_SEGMENT_LENGTH_RATIO = 0.75
+
+# 너무 짧은 잔여 세그먼트는 최종 자막에서 제외합니다.
+MIN_SEGMENT_DURATION_SEC = 0.5
+
+# 포함/유사/동일 병합은 반복될수록 새 포함 관계가 생기므로 제한 횟수만 반복합니다.
+POSTPROCESS_PASSES = 3
+
+
+@dataclass(frozen=True)
+class MergeParams:
+    # GUI와 API에서 조절하는 후처리 병합 파라미터입니다.
+    duplicate_gap_sec: float = DUPLICATE_SEGMENT_MAX_GAP_SEC
+    contained_gap_sec: float = CONTAINED_SEGMENT_MAX_GAP_SEC
+    min_contained_key_len: int = MIN_CONTAINED_MERGE_KEY_LEN
+    similar_threshold: float = SIMILAR_SEGMENT_THRESHOLD
+    min_similar_key_len: int = MIN_SIMILAR_MERGE_KEY_LEN
+    similar_length_ratio: float = SIMILAR_SEGMENT_LENGTH_RATIO
+    min_duration_sec: float = MIN_SEGMENT_DURATION_SEC
+    postprocess_passes: int = POSTPROCESS_PASSES
+
+    @classmethod
+    def from_mapping(cls, values: "MergeParams | Mapping[str, Any] | None" = None) -> "MergeParams":
+        # 기존 호출부는 None을 넘기므로 항상 현재 알고리즘 기본값을 사용합니다.
+        if values is None:
+            return cls()
+        if isinstance(values, cls):
+            return values
+
+        allowed_keys = set(cls.__dataclass_fields__.keys())
+        unknown_keys = set(values.keys()) - allowed_keys
+        if unknown_keys:
+            raise ValueError(f"Unknown merge params: {', '.join(sorted(unknown_keys))}")
+        return cls(**{key: values[key] for key in allowed_keys if key in values})
+
+    def to_dict(self) -> dict[str, float | int]:
+        # API 응답에서 dataclass 의존성을 숨기기 위해 일반 dict로 변환합니다.
+        return {
+            "duplicate_gap_sec": self.duplicate_gap_sec,
+            "contained_gap_sec": self.contained_gap_sec,
+            "min_contained_key_len": self.min_contained_key_len,
+            "similar_threshold": self.similar_threshold,
+            "min_similar_key_len": self.min_similar_key_len,
+            "similar_length_ratio": self.similar_length_ratio,
+            "min_duration_sec": self.min_duration_sec,
+            "postprocess_passes": self.postprocess_passes,
+        }
+
+
+DEFAULT_MERGE_PARAMS = MergeParams()
+
+# JSONL 추적 결과는 비용이 크므로 파일 상태 기준으로 메모리에 보관합니다.
+_BASE_SEGMENT_CACHE: dict[tuple[str, int, int], list[Segment]] = {}
+_BASE_SEGMENT_CACHE_MAX_ITEMS = 8
 
 
 def _normalized_merge_key(text: str) -> str:
@@ -144,6 +200,8 @@ def _merge_highly_similar_segments(
     segments: list[Segment],
     max_gap_sec: float = CONTAINED_SEGMENT_MAX_GAP_SEC,
     similarity_threshold: float = SIMILAR_SEGMENT_THRESHOLD,
+    min_key_len: int = MIN_SIMILAR_MERGE_KEY_LEN,
+    length_ratio_threshold: float = SIMILAR_SEGMENT_LENGTH_RATIO,
 ) -> list[Segment]:
     # OCR 한두 글자 차이로 갈라진 매우 유사한 근접 세그먼트만 보수적으로 병합합니다.
     merged_segments: list[Segment] = []
@@ -153,7 +211,7 @@ def _merge_highly_similar_segments(
 
         for previous in reversed(merged_segments):
             previous_key = _normalized_merge_key(previous.text)
-            if len(seg_key) < MIN_SIMILAR_MERGE_KEY_LEN or len(previous_key) < MIN_SIMILAR_MERGE_KEY_LEN:
+            if len(seg_key) < min_key_len or len(previous_key) < min_key_len:
                 continue
 
             gap_sec = seg.start - previous.end
@@ -162,7 +220,7 @@ def _merge_highly_similar_segments(
                 continue
 
             length_ratio = min(len(seg_key), len(previous_key)) / max(len(seg_key), len(previous_key))
-            if length_ratio < 0.75:
+            if length_ratio < length_ratio_threshold:
                 continue
 
             similarity = SequenceMatcher(None, seg_key, previous_key).ratio()
@@ -184,7 +242,7 @@ def _merge_highly_similar_segments(
     return sorted(merged_segments, key=lambda item: (item.start, item.end, item.text))
 
 
-def _dedupe_repeated_lines(text: str) -> str:
+def _dedupe_repeated_lines(text: str, min_key_len: int = MIN_CONTAINED_MERGE_KEY_LEN) -> str:
     # 같은 세그먼트 안에 중복으로 잡힌 OCR 줄은 한 번만 남깁니다.
     deduped_lines: list[tuple[str, str]] = []
     for line in text.splitlines():
@@ -211,7 +269,7 @@ def _dedupe_repeated_lines(text: str) -> str:
                 if len(line_key) <= len(existing_key)
                 else (existing_key, line_key)
             )
-            if len(short_key) < MIN_CONTAINED_MERGE_KEY_LEN or not _is_safe_containment(short_key, long_key):
+            if len(short_key) < min_key_len or not _is_safe_containment(short_key, long_key):
                 continue
 
             if len(line_key) > len(existing_key):
@@ -225,29 +283,54 @@ def _dedupe_repeated_lines(text: str) -> str:
     return "\n".join(line for line, _ in deduped_lines)
 
 
-def _normalize_segment_texts(segments: list[Segment]) -> list[Segment]:
+def _normalize_segment_texts(
+    segments: list[Segment],
+    min_key_len: int = MIN_CONTAINED_MERGE_KEY_LEN,
+) -> list[Segment]:
     # 후처리 전에 세그먼트 내부 줄 단위 중복을 정리합니다.
     normalized_segments: list[Segment] = []
     for seg in segments:
-        normalized_text = _dedupe_repeated_lines(seg.text)
+        normalized_text = _dedupe_repeated_lines(seg.text, min_key_len=min_key_len)
         if normalized_text:
             seg.text = normalized_text
             normalized_segments.append(seg)
     return normalized_segments
 
 
-def _postprocess_segments(segments: list[Segment], max_passes: int = 3) -> list[Segment]:
+def _postprocess_segments(
+    segments: list[Segment],
+    params: MergeParams | Mapping[str, Any] | None = None,
+    max_passes: int | None = None,
+) -> list[Segment]:
     # 병합으로 새 포함 관계가 생길 수 있으므로 짧게 반복해 고정점에 가깝게 정리합니다.
-    processed_segments = _normalize_segment_texts(segments)
-    for _ in range(max_passes):
+    merge_params = MergeParams.from_mapping(params)
+    pass_count = merge_params.postprocess_passes if max_passes is None else max_passes
+    processed_segments = _normalize_segment_texts(
+        segments,
+        min_key_len=merge_params.min_contained_key_len,
+    )
+    for _ in range(pass_count):
         before = [(seg.start, seg.end, seg.text) for seg in processed_segments]
         processed_segments = _merge_nearby_identical_segments(
             processed_segments,
-            max_gap_sec=DUPLICATE_SEGMENT_MAX_GAP_SEC,
+            max_gap_sec=merge_params.duplicate_gap_sec,
         )
-        processed_segments = _merge_contained_segments(processed_segments)
-        processed_segments = _merge_highly_similar_segments(processed_segments)
-        processed_segments = _normalize_segment_texts(processed_segments)
+        processed_segments = _merge_contained_segments(
+            processed_segments,
+            max_gap_sec=merge_params.contained_gap_sec,
+            min_key_len=merge_params.min_contained_key_len,
+        )
+        processed_segments = _merge_highly_similar_segments(
+            processed_segments,
+            max_gap_sec=merge_params.contained_gap_sec,
+            similarity_threshold=merge_params.similar_threshold,
+            min_key_len=merge_params.min_similar_key_len,
+            length_ratio_threshold=merge_params.similar_length_ratio,
+        )
+        processed_segments = _normalize_segment_texts(
+            processed_segments,
+            min_key_len=merge_params.min_contained_key_len,
+        )
         after = [(seg.start, seg.end, seg.text) for seg in processed_segments]
         if after == before:
             break
@@ -284,9 +367,102 @@ def _choose_representative_text(text_counter: Counter[str]) -> str:
     return max(display_counter, key=lambda text: (display_counter[text], len(_normalized_merge_key(text))))
 
 
-def _filter_short_segments(segments: list[Segment], min_duration_sec: float = 0.5) -> list[Segment]:
+def _filter_short_segments(
+    segments: list[Segment],
+    min_duration_sec: float = MIN_SEGMENT_DURATION_SEC,
+) -> list[Segment]:
     # 병합 후에도 너무 짧게 남은 세그먼트는 자막 노이즈로 보고 제거합니다.
     return [seg for seg in segments if seg.end - seg.start > min_duration_sec]
+
+
+def _clone_segments(segments: list[Segment]) -> list[Segment]:
+    # 캐시된 base segment가 후처리 중 변형되지 않도록 항상 복사본을 사용합니다.
+    return [
+        Segment(index=seg.index, start=seg.start, end=seg.end, text=seg.text)
+        for seg in segments
+    ]
+
+
+def _reindex_segments(segments: list[Segment]) -> list[Segment]:
+    # SRT 출력과 프리뷰가 같은 1-based index를 보도록 정렬 후 번호를 다시 매깁니다.
+    ordered_segments = sorted(segments, key=lambda seg: (seg.start, seg.end, seg.text))
+    for index, seg in enumerate(ordered_segments, start=1):
+        seg.index = index
+    return ordered_segments
+
+
+def _to_srt_timestamp(seconds: float) -> str:
+    # SRT 표준 타임스탬프 문자열로 변환합니다.
+    if seconds < 0:
+        seconds = 0.0
+    total_ms = int(round(seconds * 1000.0))
+    ms = total_ms % 1000
+    total_seconds = total_ms // 1000
+    s = total_seconds % 60
+    total_minutes = total_seconds // 60
+    m = total_minutes % 60
+    h = total_minutes // 60
+    return f"{h:02d}:{m:02d}:{s:02d},{ms:03d}"
+
+
+def _detect_srt_language(segments: list[Segment]) -> str:
+    # 대표 샘플에서 SRT 확장자 언어 코드를 추정합니다.
+    langs: List[str] = []
+    sample_size = min(100, len(segments))
+    for seg in random.sample(segments, sample_size):
+        try:
+            langs.append(detect(seg.text))
+        except LangDetectException:
+            continue
+    return Counter(langs).most_common(1)[0][0] if langs else "un"
+
+
+def postprocess_base_segments(
+    segments: list[Segment],
+    params: MergeParams | Mapping[str, Any] | None = None,
+) -> list[Segment]:
+    # 캐시된 base segment에 사용자가 선택한 후처리 파라미터를 적용합니다.
+    merge_params = MergeParams.from_mapping(params)
+    processed_segments = sorted(_clone_segments(segments), key=lambda seg: (seg.start, seg.end, seg.text))
+    processed_segments = _postprocess_segments(processed_segments, params=merge_params)
+    processed_segments = [seg for seg in processed_segments if seg.end >= seg.start]
+    processed_segments = _filter_short_segments(
+        processed_segments,
+        min_duration_sec=merge_params.min_duration_sec,
+    )
+    return _reindex_segments(processed_segments)
+
+
+def write_srt(
+    jsonl_path_obj: Path,
+    segments: list[Segment],
+    target_path: Path | None = None,
+) -> Path:
+    # 이미 후처리된 segment 목록을 기존 프로젝트 정책인 UTF-8 LF SRT로 저장합니다.
+    ordered_segments = _reindex_segments(_clone_segments(segments))
+    if target_path is None:
+        most_common_lang = _detect_srt_language(ordered_segments)
+        srt_path = jsonl_path_obj.with_suffix(f".{most_common_lang}.srt")
+    else:
+        srt_path = target_path
+
+    with srt_path.open("w", encoding="utf-8", newline="\n") as handle:
+        first = True
+        for seg in ordered_segments:
+            if not first:
+                handle.write("\n")
+            first = False
+            handle.write(f"{seg.index}\n")
+            handle.write(f"{_to_srt_timestamp(seg.start)} --> {_to_srt_timestamp(seg.end)}\n")
+            handle.write(f"{seg.text}\n")
+
+    return srt_path
+
+
+def _cache_key_for_jsonl(jsonl_path_obj: Path) -> tuple[str, int, int]:
+    # 파일 경로, 크기, 수정 시각이 같으면 같은 OCR 추적 입력으로 간주합니다.
+    stat = jsonl_path_obj.stat()
+    return str(jsonl_path_obj.resolve()), stat.st_size, stat.st_mtime_ns
 
 
 def fine_video(jsonl_path_obj: Path) -> Path:
@@ -578,7 +754,7 @@ def _dump_visualized_frames_with_progress(video_path: Path, frame_infos: list[Fr
     print(f"[Viz] Saved: {saved_count}, skipped: {skipped_count}")
 
 
-def jsonl_to_srt(jsonl_path_obj: Path, visualize=False) -> Path:
+def _build_base_segments_uncached(jsonl_path_obj: Path, visualize=False) -> list[Segment]:
     # 경로 확인
     if not jsonl_path_obj.exists():
         raise FileNotFoundError(f"JSONL file not found: {jsonl_path_obj}")
@@ -703,48 +879,6 @@ def jsonl_to_srt(jsonl_path_obj: Path, visualize=False) -> Path:
             current_norm_text = norm_text
             previous_frame_idx = frame_info.frame_idx
 
-    def to_direct_srt_timestamp(seconds: float) -> str:
-        if seconds < 0:
-            seconds = 0.0
-        total_ms = int(round(seconds * 1000.0))
-        ms = total_ms % 1000
-        total_seconds = total_ms // 1000
-        s = total_seconds % 60
-        total_minutes = total_seconds // 60
-        m = total_minutes % 60
-        h = total_minutes // 60
-        return f"{h:02d}:{m:02d}:{s:02d},{ms:03d}"
-
-    def write_direct_crop_segments(segments: list[Segment]) -> Path:
-        segments.sort(key=lambda seg: (seg.start, seg.end, seg.text))
-        segments = _postprocess_segments(segments)
-        segments = [seg for seg in segments if seg.end >= seg.start]
-        segments = _filter_short_segments(segments)
-        for i, seg in enumerate(segments, start=1):
-            seg.index = i
-
-        langs: List[str] = []
-        sample_size = min(100, len(segments))
-        for seg in random.sample(segments, sample_size):
-            try:
-                langs.append(detect(seg.text))
-            except LangDetectException:
-                continue
-        most_common_lang = Counter(langs).most_common(1)[0][0] if langs else "un"
-        srt_path = jsonl_path_obj.with_suffix(f".{most_common_lang}.srt")
-
-        with srt_path.open("w", encoding="utf-8", newline="\n") as handle:
-            first = True
-            for seg in segments:
-                if not first:
-                    handle.write("\n")
-                first = False
-                handle.write(f"{seg.index}\n")
-                handle.write(f"{to_direct_srt_timestamp(seg.start)} --> {to_direct_srt_timestamp(seg.end)}\n")
-                handle.write(f"{seg.text}\n")
-
-        return srt_path
-
     def build_direct_crop_segments() -> list[Segment]:
         assign_direct_crop_track_ids()
         track_frame_counts: dict[int, int] = defaultdict(int)
@@ -786,7 +920,7 @@ def jsonl_to_srt(jsonl_path_obj: Path, visualize=False) -> Path:
         return segments
 
     if is_direct_crop_tracking_result():
-        return write_direct_crop_segments(build_direct_crop_segments())
+        return build_direct_crop_segments()
 
     def box_from_points(points: np.ndarray) -> tuple[float, float, float, float]:
         x1 = float(min(points[0][0], points[1][0]))
@@ -1050,51 +1184,44 @@ def jsonl_to_srt(jsonl_path_obj: Path, visualize=False) -> Path:
         )
 
     # 처리 로직 주석
-    segments.sort(key=lambda seg: (seg.start, seg.end, seg.text))
-    segments = _postprocess_segments(segments)
+    # 후처리와 파일 쓰기는 호출 계층에서 수행해 프리뷰와 저장이 같은 base segment를 공유합니다.
+    return sorted(segments, key=lambda seg: (seg.start, seg.end, seg.text))
 
-    # end < start 인 세그먼트 제거
-    segments = [seg for seg in segments if seg.end >= seg.start]
-    segments = _filter_short_segments(segments)
-    for i, seg in enumerate(segments, start=1):
-        seg.index = i
 
-    # 자막 타임스탬프 생성
-    def to_srt_timestamp(seconds: float) -> str:
-        if seconds < 0:
-            seconds = 0.0
-        total_ms = int(round(seconds * 1000.0))
-        ms = total_ms % 1000
-        total_seconds = total_ms // 1000
-        s = total_seconds % 60
-        total_minutes = total_seconds // 60
-        m = total_minutes % 60
-        h = total_minutes // 60
-        return f"{h:02d}:{m:02d}:{s:02d},{ms:03d}"
+def build_base_segments(jsonl_path_obj: Path, visualize=False) -> list[Segment]:
+    # JSONL에서 tracker/base segment를 만드는 비싼 단계를 파일 상태 기준으로 캐시합니다.
+    if visualize:
+        return _clone_segments(_build_base_segments_uncached(jsonl_path_obj, visualize=True))
 
-    # 언어 감지 및 자막 경로 결정
-    langs: List[str] = []
-    sample_size = min(100, len(segments))
-    for seg in random.sample(segments, sample_size):
-        try:
-            langs.append(detect(seg.text))
-        except LangDetectException:
-            continue
-    most_common_lang = Counter(langs).most_common(1)[0][0] if langs else "un"
-    srt_path = jsonl_path_obj.with_suffix(f".{most_common_lang}.srt")
+    cache_key = _cache_key_for_jsonl(jsonl_path_obj)
+    cached_segments = _BASE_SEGMENT_CACHE.get(cache_key)
+    if cached_segments is None:
+        cached_segments = _build_base_segments_uncached(jsonl_path_obj, visualize=False)
+        if len(_BASE_SEGMENT_CACHE) >= _BASE_SEGMENT_CACHE_MAX_ITEMS:
+            oldest_key = next(iter(_BASE_SEGMENT_CACHE))
+            _BASE_SEGMENT_CACHE.pop(oldest_key, None)
+        _BASE_SEGMENT_CACHE[cache_key] = _clone_segments(cached_segments)
+    return _clone_segments(cached_segments)
 
-    # SRT 파일 쓰기
-    with srt_path.open("w", encoding="utf-8", newline="\n") as handle:
-        first = True
-        for seg in segments:
-            if not first:
-                handle.write("\n")
-            first = False
-            handle.write(f"{seg.index}\n")
-            handle.write(f"{to_srt_timestamp(seg.start)} --> {to_srt_timestamp(seg.end)}\n")
-            handle.write(f"{seg.text}\n")
 
-    return srt_path
+def build_preview_segments(
+    jsonl_path_obj: Path,
+    params: MergeParams | Mapping[str, Any] | None = None,
+    visualize=False,
+) -> list[Segment]:
+    # 프리뷰와 저장 모두 같은 base segment에 같은 후처리를 적용하도록 통합합니다.
+    base_segments = build_base_segments(jsonl_path_obj, visualize=visualize)
+    return postprocess_base_segments(base_segments, params=params)
+
+
+def jsonl_to_srt(
+    jsonl_path_obj: Path,
+    visualize=False,
+    params: MergeParams | Mapping[str, Any] | None = None,
+) -> Path:
+    # 기존 공개 함수는 기본값을 유지하되 새 프리뷰/저장 계층을 사용합니다.
+    segments = build_preview_segments(jsonl_path_obj, params=params, visualize=visualize)
+    return write_srt(jsonl_path_obj, segments)
 
 
 def main():
