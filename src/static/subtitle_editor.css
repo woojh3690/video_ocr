@@ -355,3 +355,109 @@ body {
         font-size: 1rem;
     }
 }
+
+@media (prefers-color-scheme: dark) {
+    html {
+        color-scheme: dark;
+    }
+
+    body {
+        background: #0f1117;
+        color: #e4e7f1;
+    }
+
+    .editor-back-link {
+        color: #9ec5ff;
+    }
+
+    .editor-back-link:hover {
+        color: #cfe1ff;
+    }
+
+    .editor-file-name,
+    .segment-count,
+    .metrics-row,
+    .slider-value,
+    .slider-caption {
+        color: #9aa4be;
+    }
+
+    .editor-status {
+        border-color: #2c3242;
+        background: #1a1d24;
+        color: #e4e7f1;
+    }
+
+    .editor-status[data-tone="loading"] {
+        border-color: rgba(234, 179, 8, 0.45);
+        background: rgba(234, 179, 8, 0.12);
+        color: #ffe8a3;
+    }
+
+    .editor-status[data-tone="success"] {
+        border-color: rgba(74, 222, 128, 0.38);
+        background: rgba(74, 222, 128, 0.12);
+        color: #bbf7d0;
+    }
+
+    .editor-status[data-tone="error"] {
+        border-color: rgba(248, 113, 113, 0.42);
+        background: rgba(248, 113, 113, 0.12);
+        color: #ffc9c9;
+    }
+
+    .subtitle-list-panel,
+    .preview-panel {
+        border-color: #2c3242;
+        background: #1a1d24;
+    }
+
+    .panel-heading {
+        border-bottom-color: #2c3242;
+    }
+
+    .subtitle-row {
+        border-bottom-color: #262c38;
+    }
+
+    .subtitle-row:hover,
+    .subtitle-row:focus {
+        background: #202634;
+    }
+
+    .subtitle-row.active {
+        background: rgba(59, 130, 246, 0.18);
+        box-shadow: inset 4px 0 0 #60a5fa;
+    }
+
+    .subtitle-time {
+        color: #8f98aa;
+    }
+
+    .subtitle-text,
+    .slider-label {
+        color: #e4e7f1;
+    }
+
+    .slider-row {
+        border-top-color: #262c38;
+    }
+
+    .btn.btn-outline-secondary {
+        color: #e4e7f1;
+        border-color: #3a3f4f;
+    }
+
+    .btn.btn-outline-secondary:hover {
+        background-color: #3a3f4f;
+        color: #ffffff;
+    }
+
+    .merge-slider::-webkit-slider-runnable-track {
+        background-color: #303747;
+    }
+
+    .merge-slider::-moz-range-track {
+        background-color: #303747;
+    }
+}
