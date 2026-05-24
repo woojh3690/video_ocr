@@ -14,6 +14,7 @@ from core.jsonl_to_srt import (
     _filter_short_segments,
     _is_safe_containment,
     _merge_contained_segments,
+    _merge_highly_similar_segments,
     _merge_nearby_identical_segments,
     _postprocess_segments,
     jsonl_to_srt,
@@ -124,6 +125,28 @@ class JsonlToSrtTests(unittest.TestCase):
         self.assertFalse(_is_safe_containment("改造人間", "昨夜襲ってきたこの改造人間たちは"))
         self.assertTrue(_is_safe_containment("どうじゃ", "どうじゃ結婚したくなってきたか"))
         self.assertTrue(_is_safe_containment("スーツっ", "ひーゅっスーツっ"))
+
+    def test_highly_similar_segments_are_merged(self):
+        segments = [
+            Segment(index=0, start=0.0, end=2.0, text="ご視聴ありがとうございました maloxx"),
+            Segment(index=0, start=1.8, end=3.0, text="ざ視聴ありがとうございました maloxx"),
+        ]
+
+        merged_segments = _merge_highly_similar_segments(segments)
+
+        self.assertEqual(len(merged_segments), 1)
+        self.assertEqual(merged_segments[0].start, 0.0)
+        self.assertEqual(merged_segments[0].end, 3.0)
+
+    def test_moderately_similar_segments_are_not_merged(self):
+        segments = [
+            Segment(index=0, start=0.0, end=2.0, text="first stable subtitle"),
+            Segment(index=0, start=1.8, end=3.0, text="first stable different"),
+        ]
+
+        merged_segments = _merge_highly_similar_segments(segments)
+
+        self.assertEqual(len(merged_segments), 2)
 
     def test_repeated_lines_are_deduped_inside_segment_text(self):
         text = "first line\nsecond line\nfirst line\n\nsecond line"

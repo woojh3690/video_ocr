@@ -46,6 +46,12 @@ CONTAINED_SEGMENT_MAX_GAP_SEC = 1.0
 # 시간상 붙어 있고 긴 후보에 포함된 4자 이상의 짧은 파편은 자동 흡수합니다.
 MIN_CONTAINED_MERGE_KEY_LEN = 4
 
+# 거의 같은 OCR 후보만 유사 병합 대상으로 삼습니다.
+SIMILAR_SEGMENT_THRESHOLD = 0.95
+
+# 너무 짧은 텍스트의 유사도는 우연히 높을 수 있으므로 제외합니다.
+MIN_SIMILAR_MERGE_KEY_LEN = 8
+
 
 def _normalized_merge_key(text: str) -> str:
     # 자막 병합 비교에서는 OCR이 흔들기 쉬운 공백, 문장부호, 대소문자를 제외합니다.
@@ -134,6 +140,50 @@ def _merge_contained_segments(
     return sorted(merged_segments, key=lambda item: (item.start, item.end, item.text))
 
 
+def _merge_highly_similar_segments(
+    segments: list[Segment],
+    max_gap_sec: float = CONTAINED_SEGMENT_MAX_GAP_SEC,
+    similarity_threshold: float = SIMILAR_SEGMENT_THRESHOLD,
+) -> list[Segment]:
+    # OCR 한두 글자 차이로 갈라진 매우 유사한 근접 세그먼트만 보수적으로 병합합니다.
+    merged_segments: list[Segment] = []
+    for seg in sorted(segments, key=lambda item: (item.start, item.end, item.text)):
+        seg_key = _normalized_merge_key(seg.text)
+        matching_segment: Segment | None = None
+
+        for previous in reversed(merged_segments):
+            previous_key = _normalized_merge_key(previous.text)
+            if len(seg_key) < MIN_SIMILAR_MERGE_KEY_LEN or len(previous_key) < MIN_SIMILAR_MERGE_KEY_LEN:
+                continue
+
+            gap_sec = seg.start - previous.end
+            overlap_sec = min(seg.end, previous.end) - max(seg.start, previous.start)
+            if gap_sec > max_gap_sec and overlap_sec <= 0.0:
+                continue
+
+            length_ratio = min(len(seg_key), len(previous_key)) / max(len(seg_key), len(previous_key))
+            if length_ratio < 0.75:
+                continue
+
+            similarity = SequenceMatcher(None, seg_key, previous_key).ratio()
+            if similarity < similarity_threshold:
+                continue
+
+            matching_segment = previous
+            break
+
+        if matching_segment is not None:
+            matching_segment.start = min(matching_segment.start, seg.start)
+            matching_segment.end = max(matching_segment.end, seg.end)
+            if len(seg_key) > len(_normalized_merge_key(matching_segment.text)):
+                matching_segment.text = seg.text
+            continue
+
+        merged_segments.append(seg)
+
+    return sorted(merged_segments, key=lambda item: (item.start, item.end, item.text))
+
+
 def _dedupe_repeated_lines(text: str) -> str:
     # 같은 세그먼트 안에 중복으로 잡힌 OCR 줄은 한 번만 남깁니다.
     deduped_lines: list[tuple[str, str]] = []
@@ -196,6 +246,7 @@ def _postprocess_segments(segments: list[Segment], max_passes: int = 3) -> list[
             max_gap_sec=DUPLICATE_SEGMENT_MAX_GAP_SEC,
         )
         processed_segments = _merge_contained_segments(processed_segments)
+        processed_segments = _merge_highly_similar_segments(processed_segments)
         processed_segments = _normalize_segment_texts(processed_segments)
         after = [(seg.start, seg.end, seg.text) for seg in processed_segments]
         if after == before:
