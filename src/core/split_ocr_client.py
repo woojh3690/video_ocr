@@ -15,11 +15,15 @@ from core.util import clean_ocr_text
 
 
 SURYA_HIGH_ACCURACY_BBOX_PROMPT = (
-    "OCR this image to HTML. Each block is a div with data-label and "
-    "data-bbox (x0 y0 x1 y1, normalized 0-1000)."
+    "Detect ordinary visible text-region bounding boxes in this image.\n"
+    "Return only a JSON array. Each item must be an object: "
+    '{"label":"Text","bbox":"x0 y0 x1 y1"}.\n'
+    "Coordinates are normalized 0-1000. Do not OCR text. Do not describe images.\n"
+    "Do not return non-text regions. If no text exists, return []."
 )
 # 기존 호출부와 테스트가 같은 프롬프트 상수를 재사용할 수 있도록 별칭을 유지합니다.
 TEXT_BBOX_ONLY_PROMPT = SURYA_HIGH_ACCURACY_BBOX_PROMPT
+FULL_FRAME_BBOX_MARGIN = 5
 
 PADDLE_OCR_PROMPT = "OCR:"
 SURYA_TEXT_LAYOUT_LABELS = {
@@ -505,11 +509,24 @@ def dedup_blocks(blocks: Iterable[TextBlock]) -> list[TextBlock]:
     seen: set[tuple[int, int, int, int]] = set()
     deduped: list[TextBlock] = []
     for block in blocks:
+        if is_full_frame_text_block(block):
+            continue
         if block.normalized_bbox in seen:
             continue
         seen.add(block.normalized_bbox)
         deduped.append(block)
     return deduped
+
+
+def is_full_frame_text_block(block: TextBlock) -> bool:
+    # Surya가 가끔 전체 화면을 Text bbox로 반환하는 오탐만 좁게 제거합니다.
+    x1, y1, x2, y2 = block.normalized_bbox
+    return (
+        x1 <= FULL_FRAME_BBOX_MARGIN
+        and y1 <= FULL_FRAME_BBOX_MARGIN
+        and x2 >= 1000 - FULL_FRAME_BBOX_MARGIN
+        and y2 >= 1000 - FULL_FRAME_BBOX_MARGIN
+    )
 
 
 def clamp_int(value: int | float, minimum: int, maximum: int) -> int:
