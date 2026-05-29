@@ -1,4 +1,5 @@
 import unittest
+import asyncio
 from pathlib import Path
 import sys
 
@@ -7,6 +8,8 @@ import numpy as np
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 
 from core.split_ocr_client import (
+    SuryaDetectorClient,
+    VisionCompletionResult,
     clean_plain_ocr_text,
     crop_with_padding,
     parse_surya_text_blocks,
@@ -69,6 +72,23 @@ class SplitOcrClientTests(unittest.TestCase):
 
     def test_empty_surya_response_has_no_blocks(self):
         self.assertEqual(parse_surya_text_blocks("", 1920, 1080), [])
+
+    def test_surya_detector_limits_bbox_generation_tokens(self):
+        class RecordingDetector(SuryaDetectorClient):
+            def __init__(self):
+                self.max_tokens = None
+
+            async def complete_image(self, image_bgr, prompt, max_tokens=None, extra_body=None):
+                self.max_tokens = max_tokens
+                return VisionCompletionResult(text="[]")
+
+        detector = RecordingDetector()
+
+        frame_number, blocks, _ = asyncio.run(detector.detect(1, np.zeros((8, 8, 3), dtype=np.uint8)))
+
+        self.assertEqual(frame_number, 1)
+        self.assertEqual(blocks, [])
+        self.assertEqual(detector.max_tokens, 512)
 
 
 if __name__ == "__main__":

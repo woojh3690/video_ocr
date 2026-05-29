@@ -175,6 +175,7 @@ class SuryaDetectorClient(OpenAIVisionClient):
             result = await self.complete_image(
                 image_bgr,
                 SURYA_HIGH_ACCURACY_BBOX_PROMPT,
+                max_tokens=512,
             )
             if result.finish_reason == "length":
                 print(f"[Warn] 프레임 {frame_idx} Surya bbox 결과가 max_tokens로 중단되었습니다.")
