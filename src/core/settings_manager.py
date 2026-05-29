@@ -14,7 +14,7 @@ DEFAULT_SETTINGS = {
     "kafka_enabled": False,
     "kafka_url": "192.168.0.2:19092",
     "detector_llm_base_url": None,
-    "detector_llm_model": "datalab-to/chandra-ocr-2",
+    "detector_llm_model": "datalab-to/surya-ocr-2",
     "recognizer_llm_base_url": None,
     "recognizer_llm_model": "PaddlePaddle/PaddleOCR-VL-1.5",
     "llm_api_key": None,

@@ -8,12 +8,12 @@ from typing import Any, Awaitable, Callable, Generator, Iterable, List
 import cv2
 
 from core.jsonl_to_srt import jsonl_to_srt
-from core.ocr_types import OcrProcessingError, SpottingItem
+from core.ocr_types import SpottingItem
 from core.settings_manager import get_settings
 from core.split_ocr_client import (
-    ChandraDetectorClient,
-    ChandraTextBlock,
     PaddleOCRRecognizerClient,
+    SuryaDetectorClient,
+    TextBlock,
     crop_with_padding,
     spotting_item_from_block,
 )
@@ -40,7 +40,7 @@ class OcrPaths:
 
 @dataclass(slots=True)
 class OcrJsonlState:
-    detector_blocks_by_frame: dict[int, list[ChandraTextBlock]]
+    detector_blocks_by_frame: dict[int, list[TextBlock]]
     ocr_records_by_frame: dict[int, dict[str, Any]]
 
     @property
@@ -83,8 +83,8 @@ async def collect_completed_progress(
     done_tasks, pending_tasks = await wait_for_completed_tasks(pending_tasks)
     return pending_tasks, await flush_completed_tasks(done_tasks)
 
-def parse_serialized_detector_blocks(blocks_data: Any) -> list[ChandraTextBlock]:
-    blocks: list[ChandraTextBlock] = []
+def parse_serialized_detector_blocks(blocks_data: Any) -> list[TextBlock]:
+    blocks: list[TextBlock] = []
     if not isinstance(blocks_data, list):
         return blocks
 
@@ -99,7 +99,7 @@ def parse_serialized_detector_blocks(blocks_data: Any) -> list[ChandraTextBlock]
         if len(normalized_bbox) != 4 or len(pixel_bbox) != 4:
             continue
         blocks.append(
-            ChandraTextBlock(
+            TextBlock(
                 normalized_bbox=normalized_bbox,  # type: ignore[arg-type]
                 pixel_bbox=pixel_bbox,  # type: ignore[arg-type]
             )
@@ -138,7 +138,7 @@ def load_ocr_jsonl_state(jsonl_path: Path) -> OcrJsonlState:
     return state
 
 
-def serialize_detector_record(frame_number: int, frame_rate: float, blocks: list[ChandraTextBlock]) -> str:
+def serialize_detector_record(frame_number: int, frame_rate: float, blocks: list[TextBlock]) -> str:
     data = {
         "record_type": "detector",
         "frame_number": frame_number,
@@ -221,8 +221,8 @@ def is_full_screen_ocr_record(record: dict[str, Any]) -> bool:
     return record_mode is None or record_mode == "full_screen"
 
 
-def full_frame_text_block(image_width: int, image_height: int) -> ChandraTextBlock:
-    return ChandraTextBlock(
+def full_frame_text_block(image_width: int, image_height: int) -> TextBlock:
+    return TextBlock(
         normalized_bbox=(0, 0, 1000, 1000),
         pixel_bbox=(0, 0, max(0, image_width - 1), max(0, image_height - 1)),
     )
@@ -417,11 +417,11 @@ async def process_ocr(
         processed_detector_frames = 0
         detector_cache_complete = True
 
-    pending_detector_tasks: set[asyncio.Task[tuple[int, list[ChandraTextBlock], str | None]]] = set()
+    pending_detector_tasks: set[asyncio.Task[tuple[int, list[TextBlock], str | None]]] = set()
     if uses_detector and detector_cache_complete:
         yield 50
     elif uses_detector:
-        detector_client = ChandraDetectorClient(
+        detector_client = SuryaDetectorClient(
             base_url=settings.detector_llm_base_url,
             model=settings.detector_llm_model,
             api_key=getattr(settings, "llm_api_key", None) or "dummy_key",
@@ -431,7 +431,7 @@ async def process_ocr(
         try:
             with jsonl_path_obj.open("a", newline="", encoding="utf-8") as jsonl_file:
                 async def flush_completed_detector_tasks(
-                    done_tasks: set[asyncio.Task[tuple[int, list[ChandraTextBlock], str | None]]],
+                    done_tasks: set[asyncio.Task[tuple[int, list[TextBlock], str | None]]],
                 ) -> list[float]:
                     nonlocal processed_detector_frames
                     progress_values: list[float] = []
@@ -501,7 +501,7 @@ async def process_ocr(
             async def recognize_crop(
                 target_frame_idx: int,
                 block_index: int,
-                block: ChandraTextBlock,
+                block: TextBlock,
                 crop,
             ) -> tuple[int, int, SpottingItem | None]:
                 text = await recognizer_client.recognize(target_frame_idx, crop)

@@ -8,11 +8,11 @@ from unittest.mock import patch
 import cv2
 import numpy as np
 
-sys.path.insert(0, str(Path(__file__).resolve().parent / "src"))
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 
 import core.ocr as ocr
 from core.ocr_types import TEXT_STATUS_TRUNCATED
-from core.split_ocr_client import ChandraTextBlock, PaddleOCRRecognizerClient, RecognizedText, VisionCompletionResult
+from core.split_ocr_client import PaddleOCRRecognizerClient, RecognizedText, VisionCompletionResult
 
 
 class OcrPipelineTests(unittest.IsolatedAsyncioTestCase):
@@ -81,7 +81,7 @@ class OcrPipelineTests(unittest.IsolatedAsyncioTestCase):
         mask_height=None,
     ):
         with (
-            patch.object(ocr, "ChandraDetectorClient", detector_cls),
+            patch.object(ocr, "SuryaDetectorClient", detector_cls),
             patch.object(ocr, "PaddleOCRRecognizerClient", recognizer_cls),
             patch.object(ocr, "jsonl_to_srt", lambda path: None),
         ):

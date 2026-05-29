@@ -1,5 +1,3 @@
-from __future__ import annotations
-
 import base64
 import json
 import re
@@ -15,19 +13,52 @@ from pydantic import ValidationError
 from core.ocr_types import OcrProcessingError, SpottingItem, TEXT_STATUS_OK, TEXT_STATUS_TRUNCATED
 from core.util import clean_ocr_text
 
-TEXT_BBOX_ONLY_PROMPT = """
-Detect ordinary visible text-region bounding boxes in this image.
-Return only a JSON array. Each item must be an object: {"label":"Text","bbox":"x0 y0 x1 y1"}.
-Coordinates are normalized 0-1000. Do not OCR text. Do not describe images.
-Do not return non-text regions. If no text exists, return [].
-""".strip()
+
+SURYA_HIGH_ACCURACY_BBOX_PROMPT = (
+    "OCR this image to HTML. Each block is a div with data-label and "
+    "data-bbox (x0 y0 x1 y1, normalized 0-1000)."
+)
+# 기존 호출부와 테스트가 같은 프롬프트 상수를 재사용할 수 있도록 별칭을 유지합니다.
+TEXT_BBOX_ONLY_PROMPT = SURYA_HIGH_ACCURACY_BBOX_PROMPT
 
 PADDLE_OCR_PROMPT = "OCR:"
+SURYA_TEXT_LAYOUT_LABELS = {
+    "Bibliography",
+    "Caption",
+    "Code",
+    "Footnote",
+    "PageFooter",
+    "PageHeader",
+    "SectionHeader",
+    "Text",
+}
+SURYA_TEXT_LAYOUT_LABEL_KEYS = {re.sub(r"[\s_-]+", "", label).lower() for label in SURYA_TEXT_LAYOUT_LABELS}
+SURYA_LAYOUT_LABEL_ALIASES = {
+    "Image": "Picture",
+    "Page-Header": "PageHeader",
+    "Page-Footer": "PageFooter",
+    "Section-Header": "SectionHeader",
+    "Table-Of-Contents": "TableOfContents",
+    "List-Group": "ListGroup",
+    "Chemical-Block": "ChemicalBlock",
+}
 _NUMBER_RE = re.compile(r"-?\d+(?:\.\d+)?")
 _TEXT_JSON_BBOX_RE = re.compile(
-    r'"label"\s*:\s*"Text".{0,80}?"?bbox"?\s*:\s*(?P<bbox>"[^"]+"|\[[^\]]+\])',
+    r'"label"\s*:\s*"(?P<label>[^"]+)".{0,80}?"?bbox"?\s*:\s*(?P<bbox>"[^"]+"|\[[^\]]+\])',
     re.DOTALL,
 )
+
+
+def canonicalize_surya_label(label: str) -> str:
+    cleaned_label = label.strip()
+    return SURYA_LAYOUT_LABEL_ALIASES.get(cleaned_label, cleaned_label)
+
+
+def is_surya_text_layout_label(label: str) -> bool:
+    # 후속 PaddleOCR-VL crop 인식에 맞도록 Surya의 텍스트성 레이아웃만 통과시킵니다.
+    canonical_label = canonicalize_surya_label(label)
+    normalized_key = re.sub(r"[\s_-]+", "", canonical_label).lower()
+    return bool(canonical_label) and normalized_key in SURYA_TEXT_LAYOUT_LABEL_KEYS
 
 
 @dataclass(frozen=True, slots=True)
@@ -45,7 +76,7 @@ class RecognizedText:
 
 
 @dataclass(frozen=True, slots=True)
-class ChandraTextBlock:
+class TextBlock:
     normalized_bbox: Tuple[int, int, int, int]
     pixel_bbox: Tuple[int, int, int, int]
 
@@ -55,7 +86,7 @@ class ChandraTextBlock:
         return ((x1, y1), (x2, y1), (x2, y2), (x1, y2))
 
 
-class ChandraLayoutParser(HTMLParser):
+class SuryaLayoutParser(HTMLParser):
     def __init__(self):
         super().__init__(convert_charrefs=True)
         self.text_bbox_values: list[str] = []
@@ -72,7 +103,7 @@ class ChandraLayoutParser(HTMLParser):
         is_layout_block = bool(label)
         is_top_level_layout = is_layout_block and self._layout_depth == 0
 
-        if is_top_level_layout and label == "Text" and bbox:
+        if is_top_level_layout and is_surya_text_layout_label(label) and bbox:
             self.text_bbox_values.append(bbox)
 
         self._div_layout_stack.append(is_layout_block)
@@ -105,13 +136,13 @@ class OpenAIVisionClient:
         self,
         image_bgr: np.ndarray,
         prompt: str,
-        max_tokens: int,
+        max_tokens: int | None = None,
         extra_body=None,
     ) -> VisionCompletionResult:
         data_url = image_to_data_url(image_bgr)
-        response = await self.client.chat.completions.create(
-            model=self.model,
-            messages=[
+        request_kwargs: dict[str, Any] = {
+            "model": self.model,
+            "messages": [
                 {
                     "role": "user",
                     "content": [
@@ -120,11 +151,13 @@ class OpenAIVisionClient:
                     ],
                 }
             ],
-            temperature=0.0,
-            stream=False,
-            max_tokens=max_tokens,
-            extra_body=extra_body or {},
-        )
+            "temperature": 0.0,
+            "stream": False,
+            "extra_body": extra_body or {},
+        }
+        if max_tokens is not None:
+            request_kwargs["max_tokens"] = max_tokens
+        response = await self.client.chat.completions.create(**request_kwargs)
         choice = response.choices[0]
         return VisionCompletionResult(
             text=extract_response_text(choice.message.content),
@@ -132,22 +165,25 @@ class OpenAIVisionClient:
         )
 
 
-class ChandraDetectorClient(OpenAIVisionClient):
+class SuryaDetectorClient(OpenAIVisionClient):
     async def detect(
         self,
         frame_idx: int,
         image_bgr: np.ndarray,
-    ) -> tuple[int, list[ChandraTextBlock], str | None]:
+    ) -> tuple[int, list[TextBlock], str | None]:
         try:
-            result = await self.complete_image(image_bgr, TEXT_BBOX_ONLY_PROMPT, max_tokens=512)
+            result = await self.complete_image(
+                image_bgr,
+                SURYA_HIGH_ACCURACY_BBOX_PROMPT,
+            )
             if result.finish_reason == "length":
-                print(f"[Warn] 프레임 {frame_idx} Chandra bbox 결과가 max_tokens로 중단되었습니다.")
+                print(f"[Warn] 프레임 {frame_idx} Surya bbox 결과가 max_tokens로 중단되었습니다.")
                 return frame_idx, [], None
             content = clean_model_text(result.text)
-            blocks = parse_chandra_text_blocks(content, image_bgr.shape[1], image_bgr.shape[0])
+            blocks = parse_surya_text_blocks(content, image_bgr.shape[1], image_bgr.shape[0])
             return frame_idx, blocks, None
         except (ValidationError, LengthFinishReasonError) as exc:
-            print(f"[Warn] 프레임 {frame_idx} Chandra bbox 검출 중 예외 발생: {exc!r}")
+            print(f"[Warn] 프레임 {frame_idx} Surya bbox 검출 중 예외 발생: {exc!r}")
             return frame_idx, [], None
         except Exception as exc:
             error = OcrProcessingError(frame_idx, exc)
@@ -222,28 +258,28 @@ def clean_plain_ocr_text(text: str) -> str:
     return clean_ocr_text(candidate)
 
 
-def parse_chandra_text_blocks(content: str, image_width: int, image_height: int) -> list[ChandraTextBlock]:
+def parse_surya_text_blocks(content: str, image_width: int, image_height: int) -> list[TextBlock]:
     if image_width <= 0 or image_height <= 0:
         raise ValueError("이미지 크기가 올바르지 않습니다.")
 
-    json_bbox_values = parse_chandra_json_bbox_values(content or "")
+    json_bbox_values = parse_layout_json_bbox_values(content or "")
     if json_bbox_values is not None:
-        blocks: list[ChandraTextBlock] = []
+        blocks: list[TextBlock] = []
         for bbox_value in json_bbox_values:
-            block = build_chandra_text_block(bbox_value, image_width, image_height)
+            block = build_text_block(bbox_value, image_width, image_height)
             if block is not None:
                 blocks.append(block)
         return dedup_blocks(blocks)
 
-    parser = ChandraLayoutParser()
+    parser = SuryaLayoutParser()
     parser.feed(content or "")
 
-    blocks: list[ChandraTextBlock] = []
+    blocks: list[TextBlock] = []
     for bbox_value in parser.text_bbox_values:
         parsed = parse_bbox_value(bbox_value)
         if parsed is None:
             continue
-        block = build_chandra_text_block(parsed, image_width, image_height)
+        block = build_text_block(parsed, image_width, image_height)
         if block is not None:
             blocks.append(block)
     return dedup_blocks(blocks)
@@ -256,7 +292,7 @@ def parse_bbox_value(value: str) -> tuple[float, float, float, float] | None:
     return numbers[0], numbers[1], numbers[2], numbers[3]
 
 
-def parse_chandra_json_bbox_values(content: str) -> list[tuple[float, float, float, float]] | None:
+def parse_layout_json_bbox_values(content: str) -> list[tuple[float, float, float, float]] | None:
     candidate = clean_model_text(content)
     if not candidate or candidate[0] not in "[{":
         return None
@@ -264,7 +300,7 @@ def parse_chandra_json_bbox_values(content: str) -> list[tuple[float, float, flo
     try:
         payload = json.loads(candidate)
     except json.JSONDecodeError:
-        return parse_chandra_malformed_json_bbox_values(candidate)
+        return parse_layout_malformed_json_bbox_values(candidate)
 
     if isinstance(payload, dict):
         payload = [payload]
@@ -273,16 +309,16 @@ def parse_chandra_json_bbox_values(content: str) -> list[tuple[float, float, flo
 
     bboxes: list[tuple[float, float, float, float]] = []
     for item in payload:
-        parsed = parse_chandra_json_bbox_item(item)
+        parsed = parse_layout_json_bbox_item(item)
         if parsed is not None:
             bboxes.append(parsed)
     return bboxes
 
 
-def parse_chandra_json_bbox_item(item: Any) -> tuple[float, float, float, float] | None:
+def parse_layout_json_bbox_item(item: Any) -> tuple[float, float, float, float] | None:
     if isinstance(item, dict):
         label = item.get("label")
-        if label is not None and str(label).strip() != "Text":
+        if label is not None and not is_surya_text_layout_label(str(label)):
             return None
         bbox = item.get("bbox") or item.get("data-bbox") or item.get("box")
         return parse_json_bbox_value(bbox)
@@ -293,9 +329,12 @@ def parse_chandra_json_bbox_item(item: Any) -> tuple[float, float, float, float]
     return None
 
 
-def parse_chandra_malformed_json_bbox_values(content: str) -> list[tuple[float, float, float, float]]:
+def parse_layout_malformed_json_bbox_values(content: str) -> list[tuple[float, float, float, float]]:
     bboxes: list[tuple[float, float, float, float]] = []
     for match in _TEXT_JSON_BBOX_RE.finditer(content):
+        label = match.group("label")
+        if not is_surya_text_layout_label(label):
+            continue
         bbox_value = match.group("bbox").strip().strip('"')
         parsed = parse_bbox_value(bbox_value)
         if parsed is not None:
@@ -327,11 +366,11 @@ def parse_json_bbox_value(value: Any) -> tuple[float, float, float, float] | Non
     return None
 
 
-def build_chandra_text_block(
+def build_text_block(
     bbox: tuple[float, float, float, float],
     image_width: int,
     image_height: int,
-) -> ChandraTextBlock | None:
+) -> TextBlock | None:
     x1, y1, x2, y2 = bbox
     left, right = sorted((x1, x2))
     top, bottom = sorted((y1, y2))
@@ -347,7 +386,7 @@ def build_chandra_text_block(
     else:
         normalized_bbox = normalize_pixel_bbox(pixel_bbox, image_width, image_height)
 
-    return ChandraTextBlock(
+    return TextBlock(
         normalized_bbox=normalized_bbox,  # type: ignore[arg-type]
         pixel_bbox=pixel_bbox,
     )
@@ -445,7 +484,7 @@ def normalize_recognized_text(text: str | RecognizedText) -> RecognizedText:
     return RecognizedText(text=clean_plain_ocr_text(text))
 
 
-def spotting_item_from_block(block: ChandraTextBlock, text: str | RecognizedText) -> SpottingItem | None:
+def spotting_item_from_block(block: TextBlock, text: str | RecognizedText) -> SpottingItem | None:
     recognized_text = normalize_recognized_text(text)
     if recognized_text.text_status != TEXT_STATUS_OK:
         # 잘린 OCR은 텍스트를 버리되 bbox 추적용 항목은 유지합니다.
@@ -461,9 +500,9 @@ def spotting_item_from_block(block: ChandraTextBlock, text: str | RecognizedText
     return SpottingItem(text=cleaned_text, quad=block.normalized_quad)
 
 
-def dedup_blocks(blocks: Iterable[ChandraTextBlock]) -> list[ChandraTextBlock]:
+def dedup_blocks(blocks: Iterable[TextBlock]) -> list[TextBlock]:
     seen: set[tuple[int, int, int, int]] = set()
-    deduped: list[ChandraTextBlock] = []
+    deduped: list[TextBlock] = []
     for block in blocks:
         if block.normalized_bbox in seen:
             continue

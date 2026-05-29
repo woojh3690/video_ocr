@@ -25,7 +25,8 @@ from kafka import KafkaProducer
 from docker.errors import APIError, DockerException
 from pydantic import BaseModel, ValidationError, ConfigDict
 
-from core.ocr import process_ocr, UPLOAD_DIR, OcrProcessingError, is_detector_cache_complete
+from core.ocr import process_ocr, UPLOAD_DIR, is_detector_cache_complete
+from core.ocr_types import OcrProcessingError
 from core.docker_manager import DockerManager
 from core.settings_manager import AppSettings, settings_manager
 from subtitle_editor import create_subtitle_editor_router
@@ -85,6 +86,18 @@ DETECTOR_ROLE = "detector"
 RECOGNIZER_ROLE = "recognizer"
 task_scheduler_lock = asyncio.Lock()
 vllm_role_lock = asyncio.Lock()
+
+
+def read_positive_int_env(name: str, default: int) -> int:
+    # 환경값이 비어 있거나 잘못되어도 서버 시작은 기본값으로 계속합니다.
+    try:
+        return max(1, int(os.getenv(name, str(default))))
+    except ValueError:
+        return default
+
+
+VLLM_READY_RETRIES = read_positive_int_env("VLLM_READY_RETRIES", 60)
+VLLM_READY_INTERVAL_SEC = read_positive_int_env("VLLM_READY_INTERVAL_SEC", 5)
 
 
 def create_kafka_producer(settings: AppSettings) -> Optional[KafkaProducer]:
@@ -680,12 +693,13 @@ async def ensure_vllm_role_unlocked(role: str, task: Task) -> bool:
         print(f"{role_name} 컨테이너 시작 중 알 수 없는 오류:", exc)
         return False
 
-    for _ in range(60):
+    for _ in range(VLLM_READY_RETRIES):
         if await is_vllm_health(role):
             print(f"{role_name} vLLM 서버가 준비되었습니다.")
             return True
-        await asyncio.sleep(5)
-    await fail_task(task, f"{role_name} vLLM 서버가 제한 시간 안에 준비되지 않았습니다.")
+        await asyncio.sleep(VLLM_READY_INTERVAL_SEC)
+    ready_timeout_sec = VLLM_READY_RETRIES * VLLM_READY_INTERVAL_SEC
+    await fail_task(task, f"{role_name} vLLM 서버가 {ready_timeout_sec}초 안에 준비되지 않았습니다.")
     return False
 
 
