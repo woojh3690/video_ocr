@@ -15,15 +15,51 @@ from core.util import clean_ocr_text
 
 
 SURYA_HIGH_ACCURACY_BBOX_PROMPT = (
-    "Detect ordinary visible text-region bounding boxes in this image.\n"
-    "Return only a JSON array. Each item must be an object: "
-    '{"label":"Text","bbox":"x0 y0 x1 y1"}.\n'
-    "Coordinates are normalized 0-1000. Do not OCR text. Do not describe images.\n"
-    "Do not return non-text regions. If no text exists, return []."
+    "Output the layout of this image as JSON. Each entry is a dict with "
+    '"label", "bbox", and "count" fields. Bbox is x0 y0 x1 y1, normalized 0-1000.'
 )
 # 기존 호출부와 테스트가 같은 프롬프트 상수를 재사용할 수 있도록 별칭을 유지합니다.
 TEXT_BBOX_ONLY_PROMPT = SURYA_HIGH_ACCURACY_BBOX_PROMPT
 FULL_FRAME_BBOX_MARGIN = 5
+BLANK_WHITE_THRESHOLD = 245
+BLANK_PIXEL_FRACTION = 0.99
+UNIFORM_COLOR_STD = 8.0
+
+SURYA_LAYOUT_LABEL_SET = [
+    "Caption",
+    "Footnote",
+    "Equation-Block",
+    "List-Group",
+    "Page-Header",
+    "Page-Footer",
+    "Image",
+    "Section-Header",
+    "Table",
+    "Text",
+    "Complex-Block",
+    "Code-Block",
+    "Form",
+    "Table-Of-Contents",
+    "Figure",
+    "Chemical-Block",
+    "Diagram",
+    "Bibliography",
+    "Blank-Page",
+]
+SURYA_LAYOUT_JSON_SCHEMA = {
+    "type": "array",
+    "maxItems": 200,
+    "items": {
+        "type": "object",
+        "properties": {
+            "label": {"type": "string", "enum": SURYA_LAYOUT_LABEL_SET},
+            "bbox": {"type": "string", "pattern": r"^\d{1,4} \d{1,4} \d{1,4} \d{1,4}$"},
+            "count": {"type": "integer", "minimum": 0, "maximum": 10000},
+        },
+        "required": ["label", "bbox", "count"],
+        "additionalProperties": False,
+    },
+}
 
 PADDLE_OCR_PROMPT = "OCR:"
 SURYA_TEXT_LAYOUT_LABELS = {
@@ -37,14 +73,31 @@ SURYA_TEXT_LAYOUT_LABELS = {
     "Text",
 }
 SURYA_TEXT_LAYOUT_LABEL_KEYS = {re.sub(r"[\s_-]+", "", label).lower() for label in SURYA_TEXT_LAYOUT_LABELS}
+SURYA_OCR_CANDIDATE_LAYOUT_LABELS = SURYA_TEXT_LAYOUT_LABELS | {
+    "ChemicalBlock",
+    "Code",
+    "ComplexBlock",
+    "Equation",
+    "Form",
+    "ListGroup",
+    "Table",
+    "TableOfContents",
+}
+SURYA_OCR_CANDIDATE_LAYOUT_LABEL_KEYS = {
+    re.sub(r"[\s_-]+", "", label).lower() for label in SURYA_OCR_CANDIDATE_LAYOUT_LABELS
+}
 SURYA_LAYOUT_LABEL_ALIASES = {
+    "Blank-Page": "BlankPage",
+    "Chemical-Block": "ChemicalBlock",
+    "Code-Block": "Code",
+    "Complex-Block": "ComplexBlock",
+    "Equation-Block": "Equation",
     "Image": "Picture",
-    "Page-Header": "PageHeader",
+    "List-Group": "ListGroup",
     "Page-Footer": "PageFooter",
+    "Page-Header": "PageHeader",
     "Section-Header": "SectionHeader",
     "Table-Of-Contents": "TableOfContents",
-    "List-Group": "ListGroup",
-    "Chemical-Block": "ChemicalBlock",
 }
 _NUMBER_RE = re.compile(r"-?\d+(?:\.\d+)?")
 _TEXT_JSON_BBOX_RE = re.compile(
@@ -63,6 +116,13 @@ def is_surya_text_layout_label(label: str) -> bool:
     canonical_label = canonicalize_surya_label(label)
     normalized_key = re.sub(r"[\s_-]+", "", canonical_label).lower()
     return bool(canonical_label) and normalized_key in SURYA_TEXT_LAYOUT_LABEL_KEYS
+
+
+def is_surya_ocr_candidate_layout_label(label: str) -> bool:
+    # 공식 layout JSON에서는 표와 수식처럼 별도 label을 가진 블록도 OCR 후보로 유지합니다.
+    canonical_label = canonicalize_surya_label(label)
+    normalized_key = re.sub(r"[\s_-]+", "", canonical_label).lower()
+    return bool(canonical_label) and normalized_key in SURYA_OCR_CANDIDATE_LAYOUT_LABEL_KEYS
 
 
 @dataclass(frozen=True, slots=True)
@@ -180,13 +240,14 @@ class SuryaDetectorClient(OpenAIVisionClient):
                 image_bgr,
                 SURYA_HIGH_ACCURACY_BBOX_PROMPT,
                 max_tokens=512,
+                extra_body={"structured_outputs": {"json": SURYA_LAYOUT_JSON_SCHEMA}},
             )
             if result.finish_reason == "length":
                 print(f"[Warn] 프레임 {frame_idx} Surya bbox 결과가 max_tokens로 중단되었습니다.")
                 return frame_idx, [], None
             content = clean_model_text(result.text)
             blocks = parse_surya_text_blocks(content, image_bgr.shape[1], image_bgr.shape[0])
-            return frame_idx, blocks, None
+            return frame_idx, filter_blank_text_blocks(blocks, image_bgr), None
         except (ValidationError, LengthFinishReasonError) as exc:
             print(f"[Warn] 프레임 {frame_idx} Surya bbox 검출 중 예외 발생: {exc!r}")
             return frame_idx, [], None
@@ -323,7 +384,7 @@ def parse_layout_json_bbox_values(content: str) -> list[tuple[float, float, floa
 def parse_layout_json_bbox_item(item: Any) -> tuple[float, float, float, float] | None:
     if isinstance(item, dict):
         label = item.get("label")
-        if label is not None and not is_surya_text_layout_label(str(label)):
+        if label is not None and not is_surya_ocr_candidate_layout_label(str(label)):
             return None
         bbox = item.get("bbox") or item.get("data-bbox") or item.get("box")
         return parse_json_bbox_value(bbox)
@@ -338,7 +399,7 @@ def parse_layout_malformed_json_bbox_values(content: str) -> list[tuple[float, f
     bboxes: list[tuple[float, float, float, float]] = []
     for match in _TEXT_JSON_BBOX_RE.finditer(content):
         label = match.group("label")
-        if not is_surya_text_layout_label(label):
+        if not is_surya_ocr_candidate_layout_label(label):
             continue
         bbox_value = match.group("bbox").strip().strip('"')
         parsed = parse_bbox_value(bbox_value)
@@ -527,6 +588,40 @@ def is_full_frame_text_block(block: TextBlock) -> bool:
         and x2 >= 1000 - FULL_FRAME_BBOX_MARGIN
         and y2 >= 1000 - FULL_FRAME_BBOX_MARGIN
     )
+
+
+def filter_blank_text_blocks(blocks: Iterable[TextBlock], image_bgr: np.ndarray) -> list[TextBlock]:
+    # Surya 공식 LayoutPredictor처럼 빈 영역 또는 단색 영역 위의 Text 오탐을 제거합니다.
+    filtered: list[TextBlock] = []
+    for block in blocks:
+        crop = crop_text_block_region(image_bgr, block)
+        if crop is not None and is_blank_or_uniform_region(crop):
+            continue
+        filtered.append(block)
+    return filtered
+
+
+def crop_text_block_region(image_bgr: np.ndarray, block: TextBlock) -> np.ndarray | None:
+    image_height, image_width = image_bgr.shape[:2]
+    x1, y1, x2, y2 = block.pixel_bbox
+    crop_x1 = clamp_int(x1, 0, image_width - 1)
+    crop_y1 = clamp_int(y1, 0, image_height - 1)
+    crop_x2 = clamp_int(x2 + 1, 0, image_width)
+    crop_y2 = clamp_int(y2 + 1, 0, image_height)
+    if crop_x2 <= crop_x1 or crop_y2 <= crop_y1:
+        return None
+    return image_bgr[crop_y1:crop_y2, crop_x1:crop_x2]
+
+
+def is_blank_or_uniform_region(image_bgr: np.ndarray) -> bool:
+    # 흰 배경 문서와 검은 화면처럼 거의 단색인 영상 프레임을 모두 빈 영역으로 취급합니다.
+    if image_bgr.size == 0:
+        return False
+    near_white_pixels = np.all(image_bgr >= BLANK_WHITE_THRESHOLD, axis=-1).mean()
+    if float(near_white_pixels) > BLANK_PIXEL_FRACTION:
+        return True
+    pixels = image_bgr.reshape(-1, image_bgr.shape[-1])
+    return float(pixels.std(axis=0).max()) < UNIFORM_COLOR_STD
 
 
 def clamp_int(value: int | float, minimum: int, maximum: int) -> int:
