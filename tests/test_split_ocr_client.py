@@ -150,6 +150,29 @@ class SplitOcrClientTests(unittest.TestCase):
         self.assertNotIn("HTML", detector.prompt)
         self.assertIn("structured_outputs", detector.extra_body)
 
+    def test_surya_detector_recovers_partial_length_bbox_response(self):
+        class LengthDetector(SuryaDetectorClient):
+            def __init__(self):
+                pass
+
+            async def complete_image(self, image_bgr, prompt, max_tokens=None, extra_body=None):
+                return VisionCompletionResult(
+                    text=(
+                        '[{"label": "Text", "bbox": "100 100 300 300", "count": 4}, '
+                        '{"label": "Image", "bbox": "0 0 1000 1000", "count": 100}, '
+                        '{"label": "Text", "bbox": "400 400 500 500"'
+                    ),
+                    finish_reason="length",
+                )
+
+        image = np.zeros((100, 100, 3), dtype=np.uint8)
+        image[:, ::2, :] = 255
+
+        frame_number, blocks, _ = asyncio.run(LengthDetector().detect(1, image))
+
+        self.assertEqual(frame_number, 1)
+        self.assertEqual([block.normalized_bbox for block in blocks], [(100, 100, 300, 300), (400, 400, 500, 500)])
+
 
 if __name__ == "__main__":
     unittest.main()

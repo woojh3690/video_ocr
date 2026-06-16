@@ -242,12 +242,19 @@ class SuryaDetectorClient(OpenAIVisionClient):
                 max_tokens=512,
                 extra_body={"structured_outputs": {"json": SURYA_LAYOUT_JSON_SCHEMA}},
             )
-            if result.finish_reason == "length":
-                print(f"[Warn] 프레임 {frame_idx} Surya bbox 결과가 max_tokens로 중단되었습니다.")
-                return frame_idx, [], None
             content = clean_model_text(result.text)
             blocks = parse_surya_text_blocks(content, image_bgr.shape[1], image_bgr.shape[0])
-            return frame_idx, filter_blank_text_blocks(blocks, image_bgr), None
+            filtered_blocks = filter_blank_text_blocks(blocks, image_bgr)
+            if result.finish_reason == "length":
+                if filtered_blocks:
+                    print(
+                        f"[Warn] 프레임 {frame_idx} Surya bbox 결과가 max_tokens로 중단되었지만 "
+                        f"bbox {len(filtered_blocks)}개를 복구했습니다."
+                    )
+                    return frame_idx, filtered_blocks, None
+                print(f"[Warn] 프레임 {frame_idx} Surya bbox 결과가 max_tokens로 중단되었습니다.")
+                return frame_idx, [], None
+            return frame_idx, filtered_blocks, None
         except (ValidationError, LengthFinishReasonError) as exc:
             print(f"[Warn] 프레임 {frame_idx} Surya bbox 검출 중 예외 발생: {exc!r}")
             return frame_idx, [], None
