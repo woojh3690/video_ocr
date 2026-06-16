@@ -16,7 +16,7 @@ DEFAULT_SETTINGS = {
     "detector_llm_base_url": None,
     "detector_llm_model": "datalab-to/surya-ocr-2",
     "recognizer_llm_base_url": None,
-    "recognizer_llm_model": "PaddlePaddle/PaddleOCR-VL-1.5",
+    "recognizer_llm_model": "PaddlePaddle/PaddleOCR-VL-1.6",
     "llm_api_key": None,
 }
 
