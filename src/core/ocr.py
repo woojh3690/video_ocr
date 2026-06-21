@@ -17,6 +17,7 @@ from core.split_ocr_client import (
     crop_with_padding,
     spotting_item_from_block,
 )
+from core.vllm_load_controller import AdaptiveConcurrencyController, VllmMetricsClient
 
 UPLOAD_DIR = "uploads"
 
@@ -28,8 +29,37 @@ def read_positive_int_env(name: str, default: int) -> int:
         return default
 
 
+# 적응형 동시성 설정은 잘못된 환경 변수 값을 안전한 기본값으로 되돌립니다.
+def read_non_negative_int_env(name: str, default: int) -> int:
+    try:
+        return max(0, int(os.getenv(name, str(default))))
+    except ValueError:
+        return default
+
+
+def read_positive_float_env(name: str, default: float) -> float:
+    try:
+        return max(0.1, float(os.getenv(name, str(default))))
+    except ValueError:
+        return default
+
+
+def read_bool_env(name: str, default: bool) -> bool:
+    value = os.getenv(name)
+    if value is None:
+        return default
+    return value.strip().lower() not in {"0", "false", "no", "off"}
+
+
 DETECTOR_CONCURRENCY = read_positive_int_env("DETECTOR_CONCURRENCY", 16)
 RECOGNIZER_CONCURRENCY = read_positive_int_env("RECOGNIZER_CONCURRENCY", 16)
+DETECTOR_MIN_CONCURRENCY = read_positive_int_env("DETECTOR_MIN_CONCURRENCY", 1)
+RECOGNIZER_MIN_CONCURRENCY = read_positive_int_env("RECOGNIZER_MIN_CONCURRENCY", 1)
+DETECTOR_MAX_CONCURRENCY = read_positive_int_env("DETECTOR_MAX_CONCURRENCY", 64)
+RECOGNIZER_MAX_CONCURRENCY = read_positive_int_env("RECOGNIZER_MAX_CONCURRENCY", 64)
+VLLM_ADAPTIVE_CONCURRENCY = read_bool_env("VLLM_ADAPTIVE_CONCURRENCY", True)
+VLLM_TARGET_WAITING = read_non_negative_int_env("VLLM_TARGET_WAITING", 2)
+VLLM_METRICS_POLL_INTERVAL_SEC = read_positive_float_env("VLLM_METRICS_POLL_INTERVAL_SEC", 1.0)
 
 
 @dataclass(frozen=True, slots=True)
@@ -82,6 +112,23 @@ async def collect_completed_progress(
 ) -> tuple[set[asyncio.Task], list[float]]:
     done_tasks, pending_tasks = await wait_for_completed_tasks(pending_tasks)
     return pending_tasks, await flush_completed_tasks(done_tasks)
+
+
+async def wait_for_submission_slot(
+    pending_tasks: set[asyncio.Task],
+    flush_completed_tasks: Callable[[set[asyncio.Task]], Awaitable[list[float]]],
+    concurrency_controller: AdaptiveConcurrencyController,
+) -> tuple[set[asyncio.Task], list[float]]:
+    # 현재 동시성 제한보다 요청이 많으면 완료분을 회수한 뒤 새 요청을 제출합니다.
+    progress_values: list[float] = []
+    while pending_tasks and len(pending_tasks) >= await concurrency_controller.refresh():
+        pending_tasks, completed_progress = await collect_completed_progress(
+            pending_tasks,
+            flush_completed_tasks,
+        )
+        progress_values.extend(completed_progress)
+    return pending_tasks, progress_values
+
 
 def parse_serialized_detector_blocks(blocks_data: Any) -> list[TextBlock]:
     blocks: list[TextBlock] = []
@@ -426,6 +473,20 @@ async def process_ocr(
             model=settings.detector_llm_model,
             api_key=getattr(settings, "llm_api_key", None) or "dummy_key",
         )
+        # vLLM 대기열이 비면 요청 창을 늘리고 목표 대기열을 넘으면 줄입니다.
+        detector_metrics_client = VllmMetricsClient(
+            base_url=settings.detector_llm_base_url or "",
+            api_key=getattr(settings, "llm_api_key", None),
+        )
+        detector_concurrency_controller = AdaptiveConcurrencyController(
+            read_load=detector_metrics_client.read_load,
+            min_limit=DETECTOR_MIN_CONCURRENCY,
+            initial_limit=DETECTOR_CONCURRENCY,
+            max_limit=DETECTOR_MAX_CONCURRENCY,
+            target_waiting=VLLM_TARGET_WAITING,
+            poll_interval_sec=VLLM_METRICS_POLL_INTERVAL_SEC,
+            enabled=VLLM_ADAPTIVE_CONCURRENCY,
+        )
         detector_cap = open_video_at_frame(video_path, start_frame)
         yield 1
         try:
@@ -461,14 +522,14 @@ async def process_ocr(
                         yield phase_progress(processed_detector_frames, total_frames, 0.0, 50.0, 50.0)
                         continue
 
+                    pending_detector_tasks, progress_values = await wait_for_submission_slot(
+                        pending_detector_tasks,
+                        flush_completed_detector_tasks,
+                        detector_concurrency_controller,
+                    )
+                    for progress in progress_values:
+                        yield progress
                     pending_detector_tasks.add(asyncio.create_task(detector_client.detect(frame_idx, frame)))
-                    if len(pending_detector_tasks) >= DETECTOR_CONCURRENCY:
-                        pending_detector_tasks, progress_values = await collect_completed_progress(
-                            pending_detector_tasks,
-                            flush_completed_detector_tasks,
-                        )
-                        for progress in progress_values:
-                            yield progress
 
                 while pending_detector_tasks:
                     pending_detector_tasks, progress_values = await collect_completed_progress(
@@ -496,6 +557,20 @@ async def process_ocr(
     recognizer_frame_order: list[int] = []
     recognizer_frame_states: dict[int, RecognizerFrameState] = {}
     next_recognizer_write_index = 0
+    # Recognizer도 별도 vLLM 모델 특성에 맞춰 독립적으로 요청 창을 조절합니다.
+    recognizer_metrics_client = VllmMetricsClient(
+        base_url=settings.recognizer_llm_base_url or "",
+        api_key=getattr(settings, "llm_api_key", None),
+    )
+    recognizer_concurrency_controller = AdaptiveConcurrencyController(
+        read_load=recognizer_metrics_client.read_load,
+        min_limit=RECOGNIZER_MIN_CONCURRENCY,
+        initial_limit=RECOGNIZER_CONCURRENCY,
+        max_limit=RECOGNIZER_MAX_CONCURRENCY,
+        target_waiting=VLLM_TARGET_WAITING,
+        poll_interval_sec=VLLM_METRICS_POLL_INTERVAL_SEC,
+        enabled=VLLM_ADAPTIVE_CONCURRENCY,
+    )
     try:
         with jsonl_path_obj.open("a", newline="", encoding="utf-8") as jsonl_file:
             async def recognize_crop(
@@ -590,17 +665,18 @@ async def process_ocr(
                     if crop is None:
                         continue
 
+                    # 슬롯 대기 중 현재 프레임이 완료된 것으로 기록되지 않도록 작업 수를 먼저 예약합니다.
                     recognizer_frame_states[frame_idx].remaining += 1
+                    pending_recognizer_tasks, progress_values = await wait_for_submission_slot(
+                        pending_recognizer_tasks,
+                        flush_completed_recognizer_tasks,
+                        recognizer_concurrency_controller,
+                    )
+                    for progress in progress_values:
+                        yield progress
                     pending_recognizer_tasks.add(
                         asyncio.create_task(recognize_crop(frame_idx, block_index, block, crop))
                     )
-                    if len(pending_recognizer_tasks) >= RECOGNIZER_CONCURRENCY:
-                        pending_recognizer_tasks, progress_values = await collect_completed_progress(
-                            pending_recognizer_tasks,
-                            flush_completed_recognizer_tasks,
-                        )
-                        for progress in progress_values:
-                            yield progress
 
                 for progress in write_ready_recognizer_frames():
                     yield progress
