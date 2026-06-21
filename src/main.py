@@ -633,7 +633,8 @@ async def start_ocr_endpoint(
     # 대기 중인 작업이 하나뿐이고 실행 중인 작업이 없다면 바로 실행
     await start_next_task()
     
-    return {"task_id": task_id}
+    # 추가 조회 없이 작업 목록에 상태를 표시할 수 있도록 현재 작업 정보를 반환합니다.
+    return asdict(tasks[task_id])
 
 
 async def fail_task(task: Task, message: str) -> None:

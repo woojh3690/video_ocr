@@ -829,10 +829,10 @@ startOcrBtn.addEventListener('click', async () => {
             return;
         }
 
-        // 정상 응답일 경우
+        // POST 응답으로 현재 상태를 표시하고 이후 상태 갱신은 WebSocket에 맡깁니다.
         const data = await response.json();
         console.log(data.task_id);
-        await loadTaskList();
+        updateTaskRow(data);
         switchToTaskListView();
     } catch (err) {
         // 네트워크 오류 등 예외 발생 시
