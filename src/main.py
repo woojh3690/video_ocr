@@ -99,7 +99,6 @@ def read_positive_int_env(name: str, default: int) -> int:
 
 VLLM_READY_RETRIES = read_positive_int_env("VLLM_READY_RETRIES", 60)
 VLLM_READY_INTERVAL_SEC = read_positive_int_env("VLLM_READY_INTERVAL_SEC", 5)
-VLLM_HEALTH_TIMEOUT_SEC = read_positive_int_env("VLLM_HEALTH_TIMEOUT_SEC", 5)
 
 
 def create_kafka_producer(settings: AppSettings) -> Optional[KafkaProducer]:
@@ -421,14 +420,12 @@ async def is_vllm_health(role: str, task_id: str | None = None, verbose: bool = 
     if verbose:
         log_ocr_event(
             "vllm-ready",
-            f"health check 시작: role={role}, url={base_url}, timeout={VLLM_HEALTH_TIMEOUT_SEC}초",
+            f"health check 시작: role={role}, url={base_url}",
             task_id,
         )
     client = openai.AsyncOpenAI(
         base_url=base_url,
         api_key=current_settings.llm_api_key or "dummy_key",
-        timeout=float(VLLM_HEALTH_TIMEOUT_SEC),
-        max_retries=0,
     )
     try:
         models = await client.models.list()
@@ -456,8 +453,6 @@ async def is_vllm_health(role: str, task_id: str | None = None, verbose: bool = 
                 task_id,
             )
         return False
-    finally:
-        await client.close()
 
 @app.get("/videos/{video_path:path}")
 async def get_video(request: Request, video_path: str):

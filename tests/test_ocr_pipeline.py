@@ -250,6 +250,46 @@ class OcrPipelineTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual([record["frame_number"] for record in final_records], list(range(1, 7)))
         self.assertTrue(all("record_type" not in record for record in final_records))
 
+    async def test_crop_resume_seeks_to_first_uncached_frame(self):
+        with self.jsonl_path.open("w", encoding="utf-8") as jsonl_file:
+            for frame_number in range(1, 5):
+                jsonl_file.write(json.dumps({
+                    "record_type": "ocr",
+                    "frame_number": frame_number,
+                    "time": round(frame_number / 10, 3),
+                    "spotting_items": [],
+                    "ocr_mode": "crop",
+                    "ocr_area": [0, 0, 48, 48],
+                    "mask_area": None,
+                }) + "\n")
+
+        class DetectorMustNotRun:
+            def __init__(self, *args, **kwargs):
+                raise AssertionError("detector should be skipped")
+
+        class FakeRecognizer:
+            def __init__(self, *args, **kwargs):
+                pass
+
+            async def recognize(self, frame_idx, crop):
+                return f"text-{frame_idx}"
+
+        original_open_video = ocr.open_video_at_frame
+        seek_positions = []
+
+        def tracked_open_video(video_path, start_frame):
+            seek_positions.append(start_frame)
+            return original_open_video(video_path, start_frame)
+
+        with patch.object(ocr, "open_video_at_frame", tracked_open_video):
+            await self._run_pipeline(
+                DetectorMustNotRun,
+                FakeRecognizer,
+                full_screen_ocr=False,
+            )
+
+        self.assertEqual(seek_positions, [4])
+
     async def test_crop_mode_skips_detector_and_recognizes_crop_directly(self):
         crop_shapes = []
 

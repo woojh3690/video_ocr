@@ -121,9 +121,9 @@ async def wait_for_submission_slot(
     flush_completed_tasks: Callable[[set[asyncio.Task]], Awaitable[list[float]]],
     concurrency_controller: AdaptiveConcurrencyController,
 ) -> tuple[set[asyncio.Task], list[float]]:
-    # 메트릭 I/O 없이 마지막 동시성 제한만 확인해 요청 제출이 지연되지 않게 합니다.
+    # 현재 동시성 제한보다 요청이 많으면 완료분을 회수한 뒤 새 요청을 제출합니다.
     progress_values: list[float] = []
-    while pending_tasks and len(pending_tasks) >= concurrency_controller.limit:
+    while pending_tasks and len(pending_tasks) >= await concurrency_controller.refresh():
         pending_tasks, completed_progress = await collect_completed_progress(
             pending_tasks,
             flush_completed_tasks,
@@ -471,9 +471,11 @@ async def process_ocr(
 
     if uses_detector:
         detector_done_frame_numbers = set(detected_blocks_by_frame) | ocr_frame_numbers
+        pending_detector_frame_numbers = required_frame_numbers - detector_done_frame_numbers
         processed_detector_frames = len(required_frame_numbers & detector_done_frame_numbers)
-        detector_cache_complete = required_frame_numbers.issubset(detector_done_frame_numbers)
+        detector_cache_complete = not pending_detector_frame_numbers
     else:
+        pending_detector_frame_numbers = set()
         processed_detector_frames = 0
         detector_cache_complete = True
 
@@ -524,10 +526,19 @@ async def process_ocr(
             component="detector-load",
             task_id=task_id,
         )
-        detector_cap = open_video_at_frame(video_path, start_frame)
-        detector_metrics_monitor = asyncio.create_task(detector_concurrency_controller.monitor())
+        first_pending_detector_frame = min(pending_detector_frame_numbers)
+        detector_seek_frame = first_pending_detector_frame - 1
+        log_ocr_event(
+            "detector",
+            (
+                f"캐시 구간 seek: first_pending={first_pending_detector_frame}, "
+                f"capture_position={detector_seek_frame}"
+            ),
+            task_id,
+        )
+        detector_cap = open_video_at_frame(video_path, detector_seek_frame)
+        yield 1
         try:
-            yield 1
             with jsonl_path_obj.open("a", newline="", encoding="utf-8") as jsonl_file:
                 async def flush_completed_detector_tasks(
                     done_tasks: set[asyncio.Task[tuple[int, list[TextBlock], str | None]]],
@@ -588,8 +599,6 @@ async def process_ocr(
                     for progress in progress_values:
                         yield progress
         finally:
-            detector_metrics_monitor.cancel()
-            await asyncio.gather(detector_metrics_monitor, return_exceptions=True)
             for task in pending_detector_tasks:
                 task.cancel()
             if detector_cap.isOpened():
@@ -612,7 +621,22 @@ async def process_ocr(
     yield 51 if uses_detector else 1
 
     # JSONL 파일에 OCR 결과를 저장하면 진행
-    recognizer_cap = open_video_at_frame(video_path, start_frame)
+    pending_recognizer_frame_numbers = required_frame_numbers - ocr_frame_numbers
+    if pending_recognizer_frame_numbers:
+        first_pending_recognizer_frame = min(pending_recognizer_frame_numbers)
+        recognizer_seek_frame = first_pending_recognizer_frame - 1
+        log_ocr_event(
+            "recognizer",
+            (
+                f"캐시 구간 seek: first_pending={first_pending_recognizer_frame}, "
+                f"capture_position={recognizer_seek_frame}"
+            ),
+            task_id,
+        )
+    else:
+        recognizer_seek_frame = end_frame
+        log_ocr_event("recognizer", "모든 대상 프레임이 캐시되어 영상 디코딩 생략", task_id)
+    recognizer_cap = open_video_at_frame(video_path, recognizer_seek_frame)
     processed_recognizer_frames = len(required_frame_numbers & ocr_frame_numbers)
     pending_recognizer_tasks: set[asyncio.Task[tuple[int, int, SpottingItem | None]]] = set()
     recognizer_frame_order: list[int] = []
@@ -645,7 +669,6 @@ async def process_ocr(
         component="recognizer-load",
         task_id=task_id,
     )
-    recognizer_metrics_monitor = asyncio.create_task(recognizer_concurrency_controller.monitor())
     try:
         with jsonl_path_obj.open("a", newline="", encoding="utf-8") as jsonl_file:
             async def recognize_crop(
@@ -778,8 +801,6 @@ async def process_ocr(
                     yield progress
             jsonl_file.flush()
     finally:
-        recognizer_metrics_monitor.cancel()
-        await asyncio.gather(recognizer_metrics_monitor, return_exceptions=True)
         for task in pending_recognizer_tasks:
             task.cancel()
         if recognizer_cap.isOpened():

@@ -105,31 +105,6 @@ class AdaptiveConcurrencyController:
     def limit(self) -> int:
         return self._limit
 
-    async def monitor(self) -> None:
-        # 메트릭 폴링은 요청 제출 경로와 분리된 백그라운드 작업에서 실행합니다.
-        if not self._enabled:
-            log_ocr_event(
-                self._component,
-                f"적응형 동시성 비활성: 고정 제한={self._initial_limit}",
-                self._task_id,
-            )
-            return
-        log_ocr_event(
-            self._component,
-            (
-                "메트릭 모니터 시작: "
-                f"초기={self._initial_limit}, 최소={self._min_limit}, 최대={self._max_limit}, "
-                f"목표 waiting={self._target_waiting}, 주기={self._poll_interval_sec:.1f}초"
-            ),
-            self._task_id,
-        )
-        try:
-            while True:
-                await self.refresh()
-                await asyncio.sleep(self._poll_interval_sec)
-        finally:
-            log_ocr_event(self._component, "메트릭 모니터 종료", self._task_id)
-
     async def refresh(self) -> int:
         # 폴링 주기 안에서는 마지막 제한값을 재사용해 메트릭 서버 부하를 제한합니다.
         now = time.monotonic()
