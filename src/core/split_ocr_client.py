@@ -1,6 +1,7 @@
 import base64
 import json
 import re
+import time
 from dataclasses import dataclass
 from html.parser import HTMLParser
 from typing import Any, Iterable, Tuple
@@ -11,6 +12,7 @@ from openai import AsyncOpenAI, LengthFinishReasonError
 from pydantic import ValidationError
 
 from core.ocr_types import OcrProcessingError, SpottingItem, TEXT_STATUS_OK, TEXT_STATUS_TRUNCATED
+from core.logging_utils import log_ocr_event
 from core.util import clean_ocr_text
 
 
@@ -184,7 +186,14 @@ class SuryaLayoutParser(HTMLParser):
 
 
 class OpenAIVisionClient:
-    def __init__(self, base_url: str | None, model: str, api_key: str = "dummy_key"):
+    def __init__(
+        self,
+        base_url: str | None,
+        model: str,
+        api_key: str = "dummy_key",
+        log_component: str = "vllm-request",
+        task_id: str | None = None,
+    ):
         normalized_base_url = (base_url or "").strip().rstrip("/")
         if not normalized_base_url:
             raise ValueError("LLM Base URL 설정이 필요합니다.")
@@ -195,6 +204,11 @@ class OpenAIVisionClient:
 
         self.client = AsyncOpenAI(base_url=normalized_base_url, api_key=api_key)
         self.model = model.strip()
+        self.log_component = log_component
+        self.task_id = task_id
+        self.submitted_requests = 0
+        self.completed_requests = 0
+        self.failed_requests = 0
 
     async def complete_image(
         self,
@@ -221,7 +235,39 @@ class OpenAIVisionClient:
         }
         if max_tokens is not None:
             request_kwargs["max_tokens"] = max_tokens
-        response = await self.client.chat.completions.create(**request_kwargs)
+        self.submitted_requests += 1
+        request_started_at = time.monotonic()
+        if self.submitted_requests == 1 or self.submitted_requests % 100 == 0:
+            log_ocr_event(
+                self.log_component,
+                (
+                    f"HTTP 요청 시작: count={self.submitted_requests}, model={self.model}, "
+                    f"image={image_bgr.shape[1]}x{image_bgr.shape[0]}"
+                ),
+                self.task_id,
+            )
+        try:
+            response = await self.client.chat.completions.create(**request_kwargs)
+        except Exception as exc:
+            # 동시 실패 시 로그 폭주를 막으면서 최초 3건과 이후 10건 단위 오류를 남깁니다.
+            self.failed_requests += 1
+            if self.failed_requests <= 3 or self.failed_requests % 10 == 0:
+                log_ocr_event(
+                    self.log_component,
+                    (
+                        f"HTTP 요청 실패: count={self.submitted_requests}, failures={self.failed_requests}, "
+                        f"elapsed={time.monotonic() - request_started_at:.2f}초, error={exc}"
+                    ),
+                    self.task_id,
+                )
+            raise
+        self.completed_requests += 1
+        if self.completed_requests == 1:
+            log_ocr_event(
+                self.log_component,
+                f"첫 HTTP 응답 완료: elapsed={time.monotonic() - request_started_at:.2f}초",
+                self.task_id,
+            )
         choice = response.choices[0]
         return VisionCompletionResult(
             text=extract_response_text(choice.message.content),

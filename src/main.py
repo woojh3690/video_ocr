@@ -28,6 +28,7 @@ from pydantic import BaseModel, ValidationError, ConfigDict
 from core.ocr import process_ocr, UPLOAD_DIR, is_detector_cache_complete
 from core.ocr_types import OcrProcessingError
 from core.docker_manager import DockerManager
+from core.logging_utils import log_ocr_event
 from core.settings_manager import AppSettings, settings_manager
 from subtitle_editor import create_subtitle_editor_router
 
@@ -98,6 +99,7 @@ def read_positive_int_env(name: str, default: int) -> int:
 
 VLLM_READY_RETRIES = read_positive_int_env("VLLM_READY_RETRIES", 60)
 VLLM_READY_INTERVAL_SEC = read_positive_int_env("VLLM_READY_INTERVAL_SEC", 5)
+VLLM_HEALTH_TIMEOUT_SEC = read_positive_int_env("VLLM_HEALTH_TIMEOUT_SEC", 5)
 
 
 def create_kafka_producer(settings: AppSettings) -> Optional[KafkaProducer]:
@@ -409,29 +411,53 @@ async def update_settings_api(payload: SettingsUpdateRequest):
     apply_runtime_settings(new_settings)
     return new_settings.model_dump()
 
-async def is_vllm_health(role: str):
+async def is_vllm_health(role: str, task_id: str | None = None, verbose: bool = True):
     """Check if vllm server is reachable"""
     config = get_role_vllm_config(role)
     base_url = (config["base_url"] or "").strip()
     expected_model = (config["model"] or "").strip()
     if not base_url:
         return False
+    if verbose:
+        log_ocr_event(
+            "vllm-ready",
+            f"health check 시작: role={role}, url={base_url}, timeout={VLLM_HEALTH_TIMEOUT_SEC}초",
+            task_id,
+        )
     client = openai.AsyncOpenAI(
         base_url=base_url,
         api_key=current_settings.llm_api_key or "dummy_key",
+        timeout=float(VLLM_HEALTH_TIMEOUT_SEC),
+        max_retries=0,
     )
     try:
         models = await client.models.list()
         model_ids = [item.id for item in getattr(models, "data", []) if getattr(item, "id", None)]
-        if model_ids:
-            print(f"{config['role_name']} vLLM 모델 목록: {', '.join(model_ids)}")
+        if model_ids and verbose:
+            log_ocr_event(
+                "vllm-ready",
+                f"{config['role_name']} 모델 목록: {', '.join(model_ids)}",
+                task_id,
+            )
         if expected_model and expected_model not in model_ids:
-            print(f"{config['role_name']} vLLM 모델 불일치: {expected_model} 없음")
+            if verbose:
+                log_ocr_event(
+                    "vllm-ready",
+                    f"{config['role_name']} 모델 불일치: expected={expected_model}",
+                    task_id,
+                )
             return False
         return bool(model_ids)
     except Exception as exc:
-        print(f"{config['role_name']} vLLM 헬스체크 실패: {exc}")
+        if verbose:
+            log_ocr_event(
+                "vllm-ready",
+                f"{config['role_name']} health check 실패: {exc}",
+                task_id,
+            )
         return False
+    finally:
+        await client.close()
 
 @app.get("/videos/{video_path:path}")
 async def get_video(request: Request, video_path: str):
@@ -645,6 +671,7 @@ async def fail_task(task: Task, message: str) -> None:
 
 async def ensure_vllm_role(role: str, task: Task) -> bool:
     # 같은 포트를 공유하는 vLLM 컨테이너 전환은 한 번에 하나만 수행합니다.
+    log_ocr_event("vllm-ready", f"{role} 역할 준비 잠금 대기", task.task_id)
     async with vllm_role_lock:
         return await ensure_vllm_role_unlocked(role, task)
 
@@ -653,6 +680,15 @@ async def ensure_vllm_role_unlocked(role: str, task: Task) -> bool:
     config = get_role_vllm_config(role)
     role_name = str(config["role_name"])
     target_container_name = (config["docker_name"] or "").strip()
+    wait_started_at = time.monotonic()
+    log_ocr_event(
+        "vllm-ready",
+        (
+            f"{role_name} 준비 확인: model={config['model']}, "
+            f"container={target_container_name or '-'}"
+        ),
+        task.task_id,
+    )
 
     if not current_settings.docker_enabled:
         await fail_task(task, "두 vLLM 컨테이너의 순차 실행을 보장하려면 Docker 자동 제어를 활성화해야 합니다.")
@@ -667,8 +703,18 @@ async def ensure_vllm_role_unlocked(role: str, task: Task) -> bool:
     opposite_config = get_role_vllm_config(get_opposite_role(role))
     opposite_container_name = (opposite_config["docker_name"] or "").strip()
     if opposite_container_name and opposite_container_name != target_container_name:
+        log_ocr_event(
+            "vllm-ready",
+            f"반대 역할 컨테이너 중지 요청: {opposite_container_name}",
+            task.task_id,
+        )
         try:
             docker_manager.stop_container(opposite_container_name)
+            log_ocr_event(
+                "vllm-ready",
+                f"반대 역할 컨테이너 중지 완료: {opposite_container_name}",
+                task.task_id,
+            )
         except (APIError, DockerException) as exc:
             error_detail = getattr(exc, "explanation", None) or str(exc)
             await fail_task(task, f"{opposite_config['role_name']} 컨테이너 중지 실패: {error_detail}")
@@ -677,13 +723,22 @@ async def ensure_vllm_role_unlocked(role: str, task: Task) -> bool:
             await fail_task(task, f"{opposite_config['role_name']} 컨테이너 중지 중 알 수 없는 오류: {exc}")
             return False
 
-    if await is_vllm_health(role):
-        print(f"{role_name} vLLM 서버가 준비되었습니다.")
+    if await is_vllm_health(role, task.task_id):
+        log_ocr_event("vllm-ready", f"{role_name} 이미 준비됨", task.task_id)
         return True
 
-    print(f"{role_name} vLLM 서버가 준비되지 않았습니다. 컨테이너를 시작합니다.")
+    log_ocr_event(
+        "vllm-ready",
+        f"{role_name} 미준비: 컨테이너 시작 요청",
+        task.task_id,
+    )
     try:
         docker_manager.start_container(target_container_name)
+        log_ocr_event(
+            "vllm-ready",
+            f"컨테이너 시작 API 완료: {target_container_name}",
+            task.task_id,
+        )
     except (APIError, DockerException) as exc:
         error_detail = getattr(exc, "explanation", None) or str(exc)
         await fail_task(task, f"{role_name} Docker 컨테이너 시작 실패: {error_detail}")
@@ -694,10 +749,26 @@ async def ensure_vllm_role_unlocked(role: str, task: Task) -> bool:
         print(f"{role_name} 컨테이너 시작 중 알 수 없는 오류:", exc)
         return False
 
-    for _ in range(VLLM_READY_RETRIES):
-        if await is_vllm_health(role):
-            print(f"{role_name} vLLM 서버가 준비되었습니다.")
+    for attempt in range(1, VLLM_READY_RETRIES + 1):
+        verbose = attempt == 1 or attempt % 6 == 0
+        if await is_vllm_health(role, task.task_id, verbose=verbose):
+            elapsed = time.monotonic() - wait_started_at
+            log_ocr_event(
+                "vllm-ready",
+                f"{role_name} 준비 완료: attempt={attempt}, elapsed={elapsed:.1f}초",
+                task.task_id,
+            )
             return True
+        if verbose:
+            elapsed = time.monotonic() - wait_started_at
+            log_ocr_event(
+                "vllm-ready",
+                (
+                    f"{role_name} 준비 대기: attempt={attempt}/{VLLM_READY_RETRIES}, "
+                    f"elapsed={elapsed:.1f}초"
+                ),
+                task.task_id,
+            )
         await asyncio.sleep(VLLM_READY_INTERVAL_SEC)
     ready_timeout_sec = VLLM_READY_RETRIES * VLLM_READY_INTERVAL_SEC
     await fail_task(task, f"{role_name} vLLM 서버가 {ready_timeout_sec}초 안에 준비되지 않았습니다.")
@@ -719,7 +790,16 @@ async def run_ocr_task(
     mask_width=None,
     mask_height=None,
 ):
-    print(f"[시작] {task_id} - {video_filename}")
+    run_started_at = time.monotonic()
+    last_logged_progress_bucket = -1
+    log_ocr_event(
+        "task",
+        (
+            f"작업 시작: video={video_filename}, full_screen={full_screen_ocr}, "
+            f"range={start_time}~{end_time}"
+        ),
+        task_id,
+    )
 
     task = tasks[task_id]
 
@@ -739,19 +819,29 @@ async def run_ocr_task(
             raise RuntimeError("OCR Recognizer 모델 설정이 필요합니다.")
 
         initial_role = RECOGNIZER_ROLE if detector_cache_complete else DETECTOR_ROLE
+        log_ocr_event(
+            "task",
+            f"초기 역할 결정: detector_cache_complete={detector_cache_complete}, role={initial_role}",
+            task_id,
+        )
         if not await ensure_vllm_role(initial_role, task):
+            log_ocr_event("task", f"{initial_role} 준비 실패로 작업 종료", task_id)
             return
 
         task.status = Status.running
         task.progress = 1
         task.task_start_time = None
         await broadcast_update(task)
+        log_ocr_event("task", "OCR 파이프라인 진입", task_id)
 
         async def switch_to_recognizer() -> bool:
             if task.status == Status.stopping:
+                log_ocr_event("task", "Recognizer 전환 전 중지 요청 확인", task_id)
                 return False
+            log_ocr_event("task", "Recognizer 역할 전환 시작", task_id)
             if not await ensure_vllm_role(RECOGNIZER_ROLE, task):
                 raise RuntimeError(task.error or "OCR Recognizer vLLM 서버를 준비하지 못했습니다.")
+            log_ocr_event("task", "Recognizer 역할 전환 완료", task_id)
             return True
 
         async for progress in process_ocr(
@@ -768,10 +858,12 @@ async def run_ocr_task(
             mask_width=mask_width,
             mask_height=mask_height,
             switch_to_recognizer=switch_to_recognizer,
+            task_id=task_id,
         ):
             # 중지 요청이 들어오면 현재 진행 중인 OCR 을 중단합니다.
             if task.status == Status.stopping:
                 task.status = Status.stopped
+                log_ocr_event("task", f"중지 완료: progress={progress}", task_id)
                 await broadcast_update(task)
                 return  # 작업 중단
 
@@ -779,6 +871,18 @@ async def run_ocr_task(
                 task.progress = progress
                 task.estimated_completion = calculate_estimated_completion(task_id)
                 await broadcast_update(task)
+                progress_bucket = min(100, int(float(progress) // 5) * 5)
+                if progress_bucket > last_logged_progress_bucket:
+                    last_logged_progress_bucket = progress_bucket
+                    elapsed = time.monotonic() - run_started_at
+                    log_ocr_event(
+                        "progress",
+                        (
+                            f"진행률={float(progress):.2f}%, elapsed={elapsed:.1f}초, "
+                            f"eta={task.estimated_completion}"
+                        ),
+                        task_id,
+                    )
             except Exception as e:
                 print("Progress message 처리 오류:", e)
 
@@ -795,6 +899,12 @@ async def run_ocr_task(
         if plain_srt_path.exists():
             srt_candidates.append(plain_srt_path)
         task.result = str(max(srt_candidates, key=lambda path: path.stat().st_mtime)) if srt_candidates else None
+        elapsed = time.monotonic() - run_started_at
+        log_ocr_event(
+            "task",
+            f"작업 완료: elapsed={elapsed:.1f}초, result={task.result or '-'}",
+            task_id,
+        )
         publish_kafka_message("discord_bot", {
             "type": "msg",
             "msg": f"{video_filename} OCR 완료."
@@ -803,17 +913,18 @@ async def run_ocr_task(
     except OcrProcessingError as e:
         task.status = Status.retryable_error
         task.error = str(e)
-        print("OCR 프레임 처리 중 오류:", e)
+        log_ocr_event("error", f"재시도 가능 오류: {e}", task_id)
         traceback.print_exc()
         await broadcast_update(task)
     except Exception as e:
         task.status = Status.fatal_error
         task.error = str(e)
-        print("OCR 작업 오류:", e)
+        log_ocr_event("error", f"치명적 오류: {e}", task_id)
         traceback.print_exc()
         await broadcast_update(task)
     finally:
         # 현재 작업이 끝나면 다음 작업을 시작합니다.
+        log_ocr_event("task", "작업 정리 및 다음 대기 작업 확인", task_id)
         await start_next_task()
 
 

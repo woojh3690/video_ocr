@@ -6,6 +6,8 @@ from typing import Awaitable, Callable
 from urllib.parse import urlsplit, urlunsplit
 from urllib.request import Request, urlopen
 
+from core.logging_utils import log_ocr_event
+
 
 # vLLM Prometheus 출력에서 실행 중/대기 중 요청 게이지만 추출합니다.
 _LOAD_METRIC_PATTERN = re.compile(
@@ -81,6 +83,8 @@ class AdaptiveConcurrencyController:
         target_waiting: int,
         poll_interval_sec: float,
         enabled: bool = True,
+        component: str = "vllm",
+        task_id: str | None = None,
     ):
         self._read_load = read_load
         self._initial_limit = max(1, initial_limit)
@@ -89,13 +93,42 @@ class AdaptiveConcurrencyController:
         self._target_waiting = max(0, target_waiting)
         self._poll_interval_sec = max(0.0, poll_interval_sec)
         self._enabled = enabled
+        self._component = component
+        self._task_id = task_id
         self._limit = self._initial_limit
         self._last_poll_at = float("-inf")
+        self._last_status_log_at = float("-inf")
+        self._has_successful_read = False
         self._warned_metrics_failure = False
 
     @property
     def limit(self) -> int:
         return self._limit
+
+    async def monitor(self) -> None:
+        # 메트릭 폴링은 요청 제출 경로와 분리된 백그라운드 작업에서 실행합니다.
+        if not self._enabled:
+            log_ocr_event(
+                self._component,
+                f"적응형 동시성 비활성: 고정 제한={self._initial_limit}",
+                self._task_id,
+            )
+            return
+        log_ocr_event(
+            self._component,
+            (
+                "메트릭 모니터 시작: "
+                f"초기={self._initial_limit}, 최소={self._min_limit}, 최대={self._max_limit}, "
+                f"목표 waiting={self._target_waiting}, 주기={self._poll_interval_sec:.1f}초"
+            ),
+            self._task_id,
+        )
+        try:
+            while True:
+                await self.refresh()
+                await asyncio.sleep(self._poll_interval_sec)
+        finally:
+            log_ocr_event(self._component, "메트릭 모니터 종료", self._task_id)
 
     async def refresh(self) -> int:
         # 폴링 주기 안에서는 마지막 제한값을 재사용해 메트릭 서버 부하를 제한합니다.
@@ -108,12 +141,19 @@ class AdaptiveConcurrencyController:
             load = await self._read_load()
         except Exception as exc:
             # 메트릭을 사용할 수 없으면 기존 고정 동시성을 유지합니다.
-            if not self._warned_metrics_failure:
-                print(f"[Warn] vLLM 메트릭을 읽지 못해 고정 동시성 {self._initial_limit}을 사용합니다: {exc}")
+            if not self._warned_metrics_failure or now - self._last_status_log_at >= 30.0:
+                log_ocr_event(
+                    self._component,
+                    f"메트릭 조회 실패: 고정 동시성 {self._initial_limit} 사용, 오류={exc}",
+                    self._task_id,
+                )
+                self._last_status_log_at = now
                 self._warned_metrics_failure = True
             self._limit = self._initial_limit
             return self._limit
 
+        previous_limit = self._limit
+        recovered = self._warned_metrics_failure
         self._warned_metrics_failure = False
         if load.waiting < self._target_waiting:
             self._limit = min(
@@ -125,4 +165,23 @@ class AdaptiveConcurrencyController:
                 self._min_limit,
                 self._limit - max(1, load.waiting - self._target_waiting),
             )
+
+        # 제한 변경, 메트릭 복구, 최초 조회와 30초 heartbeat를 한 줄로 기록합니다.
+        should_log = (
+            not self._has_successful_read
+            or recovered
+            or previous_limit != self._limit
+            or now - self._last_status_log_at >= 30.0
+        )
+        self._has_successful_read = True
+        if should_log:
+            log_ocr_event(
+                self._component,
+                (
+                    f"부하 상태: running={load.running}, waiting={load.waiting}, "
+                    f"동시성={previous_limit}->{self._limit}"
+                ),
+                self._task_id,
+            )
+            self._last_status_log_at = now
         return self._limit

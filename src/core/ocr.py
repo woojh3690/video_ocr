@@ -1,6 +1,7 @@
 import asyncio
 import os
 import json
+import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Awaitable, Callable, Generator, Iterable, List
@@ -8,6 +9,7 @@ from typing import Any, Awaitable, Callable, Generator, Iterable, List
 import cv2
 
 from core.jsonl_to_srt import jsonl_to_srt
+from core.logging_utils import log_ocr_event
 from core.ocr_types import SpottingItem
 from core.settings_manager import get_settings
 from core.split_ocr_client import (
@@ -119,9 +121,9 @@ async def wait_for_submission_slot(
     flush_completed_tasks: Callable[[set[asyncio.Task]], Awaitable[list[float]]],
     concurrency_controller: AdaptiveConcurrencyController,
 ) -> tuple[set[asyncio.Task], list[float]]:
-    # 현재 동시성 제한보다 요청이 많으면 완료분을 회수한 뒤 새 요청을 제출합니다.
+    # 메트릭 I/O 없이 마지막 동시성 제한만 확인해 요청 제출이 지연되지 않게 합니다.
     progress_values: list[float] = []
-    while pending_tasks and len(pending_tasks) >= await concurrency_controller.refresh():
+    while pending_tasks and len(pending_tasks) >= concurrency_controller.limit:
         pending_tasks, completed_progress = await collect_completed_progress(
             pending_tasks,
             flush_completed_tasks,
@@ -408,6 +410,7 @@ async def process_ocr(
     mask_width=None,
     mask_height=None,
     switch_to_recognizer: Callable[[], Awaitable[bool]] | None = None,
+    task_id: str | None = None,
 ):
     has_any_mask_value = any(value is not None for value in (mask_x, mask_y, mask_width, mask_height))
     if has_any_mask_value and not full_screen_ocr:
@@ -432,6 +435,14 @@ async def process_ocr(
 
     # 영상 정보 추출
     start_frame, end_frame, total_frames, frame_rate = get_ocr_frame_range(video_path, start_time, end_time)
+    log_ocr_event(
+        "pipeline",
+        (
+            f"영상 범위 확인: video={video_filename}, frames={start_frame + 1}~{end_frame}, "
+            f"total={total_frames}, fps={frame_rate:.3f}, detector={uses_detector}"
+        ),
+        task_id,
+    )
 
     # OCR 을 진행할 프레임으로 이동
     total_frames = max(1, total_frames)
@@ -443,6 +454,8 @@ async def process_ocr(
         base_url=settings.recognizer_llm_base_url,
         model=settings.recognizer_llm_model,
         api_key=getattr(settings, "llm_api_key", None) or "dummy_key",
+        log_component="recognizer-http",
+        task_id=task_id,
     )
 
     jsonl_state = load_ocr_jsonl_state(jsonl_path_obj)
@@ -464,14 +477,36 @@ async def process_ocr(
         processed_detector_frames = 0
         detector_cache_complete = True
 
+    log_ocr_event(
+        "pipeline",
+        (
+            f"캐시 로드 완료: detector_frames={len(detected_blocks_by_frame)}, "
+            f"ocr_frames={len(ocr_frame_numbers)}, detector_complete={detector_cache_complete}"
+        ),
+        task_id,
+    )
+
     pending_detector_tasks: set[asyncio.Task[tuple[int, list[TextBlock], str | None]]] = set()
     if uses_detector and detector_cache_complete:
+        log_ocr_event("detector", "Detector 단계 건너뜀: 캐시 완료", task_id)
         yield 50
     elif uses_detector:
+        detector_phase_started_at = time.monotonic()
+        submitted_detector_requests = 0
+        log_ocr_event(
+            "detector",
+            (
+                f"단계 시작: model={settings.detector_llm_model}, "
+                f"cached={processed_detector_frames}/{total_frames}"
+            ),
+            task_id,
+        )
         detector_client = SuryaDetectorClient(
             base_url=settings.detector_llm_base_url,
             model=settings.detector_llm_model,
             api_key=getattr(settings, "llm_api_key", None) or "dummy_key",
+            log_component="detector-http",
+            task_id=task_id,
         )
         # vLLM 대기열이 비면 요청 창을 늘리고 목표 대기열을 넘으면 줄입니다.
         detector_metrics_client = VllmMetricsClient(
@@ -486,10 +521,13 @@ async def process_ocr(
             target_waiting=VLLM_TARGET_WAITING,
             poll_interval_sec=VLLM_METRICS_POLL_INTERVAL_SEC,
             enabled=VLLM_ADAPTIVE_CONCURRENCY,
+            component="detector-load",
+            task_id=task_id,
         )
         detector_cap = open_video_at_frame(video_path, start_frame)
-        yield 1
+        detector_metrics_monitor = asyncio.create_task(detector_concurrency_controller.monitor())
         try:
+            yield 1
             with jsonl_path_obj.open("a", newline="", encoding="utf-8") as jsonl_file:
                 async def flush_completed_detector_tasks(
                     done_tasks: set[asyncio.Task[tuple[int, list[TextBlock], str | None]]],
@@ -529,7 +567,18 @@ async def process_ocr(
                     )
                     for progress in progress_values:
                         yield progress
+                    if submitted_detector_requests == 0:
+                        elapsed = time.monotonic() - detector_phase_started_at
+                        log_ocr_event(
+                            "detector",
+                            (
+                                f"첫 요청 제출: frame={frame_idx}, elapsed={elapsed:.1f}초, "
+                                f"limit={detector_concurrency_controller.limit}"
+                            ),
+                            task_id,
+                        )
                     pending_detector_tasks.add(asyncio.create_task(detector_client.detect(frame_idx, frame)))
+                    submitted_detector_requests += 1
 
                 while pending_detector_tasks:
                     pending_detector_tasks, progress_values = await collect_completed_progress(
@@ -539,12 +588,24 @@ async def process_ocr(
                     for progress in progress_values:
                         yield progress
         finally:
+            detector_metrics_monitor.cancel()
+            await asyncio.gather(detector_metrics_monitor, return_exceptions=True)
             for task in pending_detector_tasks:
                 task.cancel()
             if detector_cap.isOpened():
                 detector_cap.release()
+            elapsed = time.monotonic() - detector_phase_started_at
+            log_ocr_event(
+                "detector",
+                (
+                    f"단계 종료: submitted={submitted_detector_requests}, "
+                    f"processed={processed_detector_frames}/{total_frames}, elapsed={elapsed:.1f}초"
+                ),
+                task_id,
+            )
 
     if uses_detector and switch_to_recognizer is not None:
+        log_ocr_event("pipeline", "Recognizer 전환 콜백 호출", task_id)
         should_continue = await switch_to_recognizer()
         if not should_continue:
             return
@@ -557,6 +618,17 @@ async def process_ocr(
     recognizer_frame_order: list[int] = []
     recognizer_frame_states: dict[int, RecognizerFrameState] = {}
     next_recognizer_write_index = 0
+    recognizer_phase_started_at = time.monotonic()
+    submitted_recognizer_requests = 0
+    completed_recognizer_requests = 0
+    log_ocr_event(
+        "recognizer",
+        (
+            f"단계 시작: model={settings.recognizer_llm_model}, "
+            f"cached={processed_recognizer_frames}/{total_frames}"
+        ),
+        task_id,
+    )
     # Recognizer도 별도 vLLM 모델 특성에 맞춰 독립적으로 요청 창을 조절합니다.
     recognizer_metrics_client = VllmMetricsClient(
         base_url=settings.recognizer_llm_base_url or "",
@@ -570,7 +642,10 @@ async def process_ocr(
         target_waiting=VLLM_TARGET_WAITING,
         poll_interval_sec=VLLM_METRICS_POLL_INTERVAL_SEC,
         enabled=VLLM_ADAPTIVE_CONCURRENCY,
+        component="recognizer-load",
+        task_id=task_id,
     )
+    recognizer_metrics_monitor = asyncio.create_task(recognizer_concurrency_controller.monitor())
     try:
         with jsonl_path_obj.open("a", newline="", encoding="utf-8") as jsonl_file:
             async def recognize_crop(
@@ -585,12 +660,14 @@ async def process_ocr(
             async def flush_completed_recognizer_tasks(
                 done_tasks: set[asyncio.Task[tuple[int, int, SpottingItem | None]]],
             ) -> list[float]:
+                nonlocal completed_recognizer_requests
                 for task in done_tasks:
                     frame_number, block_index, spotting_item = await task
                     frame_state = recognizer_frame_states[frame_number]
                     if spotting_item is not None:
                         frame_state.items[block_index] = spotting_item
                     frame_state.remaining -= 1
+                    completed_recognizer_requests += 1
                 return write_ready_recognizer_frames()
 
             def write_ready_recognizer_frames() -> list[float]:
@@ -674,9 +751,20 @@ async def process_ocr(
                     )
                     for progress in progress_values:
                         yield progress
+                    if submitted_recognizer_requests == 0:
+                        elapsed = time.monotonic() - recognizer_phase_started_at
+                        log_ocr_event(
+                            "recognizer",
+                            (
+                                f"첫 요청 제출: frame={frame_idx}, block={block_index}, "
+                                f"elapsed={elapsed:.1f}초, limit={recognizer_concurrency_controller.limit}"
+                            ),
+                            task_id,
+                        )
                     pending_recognizer_tasks.add(
                         asyncio.create_task(recognize_crop(frame_idx, block_index, block, crop))
                     )
+                    submitted_recognizer_requests += 1
 
                 for progress in write_ready_recognizer_frames():
                     yield progress
@@ -690,13 +778,32 @@ async def process_ocr(
                     yield progress
             jsonl_file.flush()
     finally:
+        recognizer_metrics_monitor.cancel()
+        await asyncio.gather(recognizer_metrics_monitor, return_exceptions=True)
         for task in pending_recognizer_tasks:
             task.cancel()
         if recognizer_cap.isOpened():
             recognizer_cap.release()
+        elapsed = time.monotonic() - recognizer_phase_started_at
+        log_ocr_event(
+            "recognizer",
+            (
+                f"단계 종료: submitted={submitted_recognizer_requests}, "
+                f"completed={completed_recognizer_requests}, "
+                f"frames={processed_recognizer_frames}/{total_frames}, elapsed={elapsed:.1f}초"
+            ),
+            task_id,
+        )
 
+    postprocess_started_at = time.monotonic()
+    log_ocr_event("postprocess", "JSONL 압축 및 SRT 생성 시작", task_id)
     compact_ocr_jsonl(jsonl_path_obj, sorted(required_frame_numbers))
     jsonl_to_srt(jsonl_path_obj)
+    log_ocr_event(
+        "postprocess",
+        f"JSONL 압축 및 SRT 생성 완료: elapsed={time.monotonic() - postprocess_started_at:.1f}초",
+        task_id,
+    )
 
     # 진행 상황 100%로 업데이트
     yield 100
